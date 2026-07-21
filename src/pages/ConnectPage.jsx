@@ -42,7 +42,7 @@ export default function ConnectPage({ onConnect, onData, gscToken }) {
       },
     })
 
-    client.requestToken()
+    client.requestAccessToken()
   }
 
   // Fetch data from GSC after authorization
