@@ -128,6 +128,14 @@ export default function AnalysisPage({ data, onGenerateKeywords }) {
   return (
     <div className="page">
 
+      {/* Generate keywords CTA — top */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+        <button className="btn-primary btn-lg" onClick={handleGenerateKeywords} disabled={generating}>
+          {generating ? 'Generating keywords + AI headlines…' : '→ Generate Ad Keywords'}
+        </button>
+        {error && <div className="error-box" style={{ margin: 0 }}>{error}</div>}
+      </div>
+
       {/* Summary stats */}
       <div className="stats-row">
         <div className="stat-card">
@@ -273,14 +281,6 @@ export default function AnalysisPage({ data, onGenerateKeywords }) {
         {filteredQueries.length === 200 && <p className="table-hint">Showing top 200 rows. Export CSV for full data.</p>}
       </div>
 
-      {/* Generate keywords CTA */}
-      <div className="generate-cta">
-        {error && <div className="error-box">{error}</div>}
-        <button className="btn-primary btn-lg" onClick={handleGenerateKeywords} disabled={generating}>
-          {generating ? 'Generating keywords + AI headlines…' : '→ Generate Ad Keywords'}
-        </button>
-        <p className="cta-hint">Generates a keyword list with match types and Claude-powered headlines for all 5 categories. Gap categories get suggested keywords added automatically.</p>
-      </div>
 
     </div>
   )
