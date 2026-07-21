@@ -1,9 +1,33 @@
 // Ad keyword generation logic
 // Takes processed GSC queries and produces a keyword list for Google Ads
 
-// Pre-built suggested keywords for gap categories
-// These are added when a category has low organic buying-intent data
-const GAP_KEYWORDS = {
+// Curated keywords for every category — these always appear regardless of GSC data.
+// Focus: category-level shopping terms, gift occasions, product type — NOT individual plant names.
+const CURATED_KEYWORDS = {
+  Succulents: [
+    'buy succulents online',
+    'succulents for sale',
+    'succulents delivered',
+    'rare succulents for sale',
+    'unique succulents online',
+    'small succulents bulk',
+    'cactus for sale online',
+    'buy cactus online',
+    'succulent plants online',
+    'aloe vera plant for sale',
+  ],
+  Houseplants: [
+    'buy houseplants online',
+    'indoor plants for sale',
+    'houseplants delivered',
+    'rare houseplants for sale',
+    'unique indoor plants',
+    'tropical houseplants online',
+    'buy indoor plants online',
+    'rare plants for sale',
+    'exotic houseplants online',
+    'houseplant shop online',
+  ],
   'Air Plants': [
     'buy air plants online',
     'air plants for sale',
@@ -25,10 +49,12 @@ const GAP_KEYWORDS = {
     'birthday succulent gift',
     'succulent gift basket',
     'succulent gift delivery',
-    'christmas cactus gift',
     'plant gift for her',
     'succulent gift ideas',
     'send succulents as a gift',
+    'plant gift for mom',
+    'unique plant gifts',
+    'get well soon plant gift',
   ],
   'Succulent Subscription': [
     'succulent subscription box',
@@ -39,6 +65,8 @@ const GAP_KEYWORDS = {
     'monthly cactus box',
     'succulent subscription service',
     'succulent delivery monthly',
+    'plant of the month club',
+    'cactus subscription box',
   ],
 }
 
@@ -51,7 +79,7 @@ function makeMatchTypes(keyword, category, source, isGapCategory) {
   ]
 }
 
-// Build the full keyword list from processed queries + gap suggestions
+// Build the full keyword list from processed queries + curated suggestions
 // Returns an array of keyword objects ready for headline generation
 export function buildAdKeywords(processedQueries, categoryStats) {
   const keywords = []
@@ -62,22 +90,35 @@ export function buildAdKeywords(processedQueries, categoryStats) {
     const stats = categoryStats[cat]
     const isGap = stats?.isGap || false
 
-    // 1. Add buying-intent queries from GSC (top 15 per category)
-    const gscBuying = (stats?.topBuyingQueries || []).slice(0, 15)
+    // 1. GSC queries that have buying intent AND are not informational (care guides, how-tos)
+    //    Capped at 10 per category — skips individual plant name-only queries automatically
+    //    since those rarely have buying signals
+    const gscBuying = (stats?.topBuyingQueries || [])
+      .filter(q => !q.isInformational)
+      .slice(0, 10)
     for (const q of gscBuying) {
       const cleanKeyword = q.query.replace(/["\[\]]/g, '').trim()
       keywords.push(...makeMatchTypes(cleanKeyword, cat, 'from_gsc', isGap))
     }
 
-    // 2. For gap categories, always add suggested keywords
-    if (isGap && GAP_KEYWORDS[cat]) {
-      for (const kw of GAP_KEYWORDS[cat]) {
-        keywords.push(...makeMatchTypes(kw, cat, 'suggested', true))
+    // 2. Always add curated category-level keywords (gift occasions, shopping terms, product type)
+    //    These are the high-value ad targets regardless of what GSC shows
+    if (CURATED_KEYWORDS[cat]) {
+      for (const kw of CURATED_KEYWORDS[cat]) {
+        keywords.push(...makeMatchTypes(kw, cat, 'suggested', isGap))
       }
     }
   }
 
-  return keywords
+  // Deduplicate by base keyword (in case a GSC query matches a curated one)
+  const seen = new Set()
+  return keywords.filter(kw => {
+    const clean = kw.keyword.replace(/["\[\]]/g, '').trim().toLowerCase()
+    const key = `${kw.category}|${clean}|${kw.matchType}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 // Call the Netlify function to generate Claude headlines for a batch of keywords
