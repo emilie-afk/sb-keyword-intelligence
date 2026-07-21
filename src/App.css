@@ -23,8 +23,10 @@ h2 { font-size: 16px; font-weight: 500; }
 .nav-btn:hover { background: #f1efe8; color: #0b0b0b; }
 .nav-btn.active { background: #f1efe8; color: #0b0b0b; font-weight: 500; }
 .nav-count { background: #0b0b0b; color: #fff; font-size: 11px; font-weight: 500; padding: 1px 6px; border-radius: 10px; }
-.btn-ghost { margin-left: auto; background: none; border: none; color: #52514e; font-size: 13px; padding: 6px 10px; border-radius: 6px; }
+.btn-ghost { background: none; border: none; color: #52514e; font-size: 13px; padding: 6px 10px; border-radius: 6px; }
 .btn-ghost:hover { background: #f1efe8; }
+.user-row { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.user-name { font-size: 13px; color: #52514e; }
 
 /* ── Connect page ── */
 .connect-card { background: #fff; border: 0.5px solid #e1e0d9; border-radius: 12px; padding: 40px; max-width: 480px; width: 100%; text-align: center; }

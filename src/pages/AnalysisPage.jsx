@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Chart } from 'chart.js/auto'
 import { buildCategoryStats } from '../lib/categorize'
-import { buildAdKeywords } from '../lib/generateKeywords'
 import { downloadQueriesCSV } from '../lib/download'
 
 const CATEGORY_COLORS = {
@@ -16,12 +15,10 @@ const CATEGORY_COLORS = {
 
 const ORDERED_CATS = ['Succulents', 'Houseplants', 'Succulent Subscription', 'Gift Boxes', 'Air Plants', 'Branded']
 
-export default function AnalysisPage({ data, onGenerateKeywords }) {
+export default function AnalysisPage({ data }) {
   const [stats, setStats] = useState(null)
-  const [filter, setFilter] = useState('all') // all | buying | informational
+  const [filter, setFilter] = useState('all')
   const [catFilter, setCatFilter] = useState('All')
-  const [generating, setGenerating] = useState(false)
-  const [error, setError] = useState(null)
   const buyingChartRef = useRef()
   const infoChartRef = useRef()
   const buyingChartInstance = useRef()
@@ -94,21 +91,6 @@ export default function AnalysisPage({ data, onGenerateKeywords }) {
       infoChartInstance.current?.destroy()
     }
   }, [stats])
-
-  const handleGenerateKeywords = async () => {
-    setGenerating(true)
-    setError(null)
-    try {
-      const { generateHeadlines } = await import('../lib/generateKeywords')
-      const baseKeywords = buildAdKeywords(data, stats)
-      const withHeadlines = await generateHeadlines(baseKeywords)
-      onGenerateKeywords(withHeadlines)
-    } catch (err) {
-      setError(`Failed to generate keywords: ${err.message}`)
-    } finally {
-      setGenerating(false)
-    }
-  }
 
   if (!stats) return <div className="loading">Processing queries…</div>
 
