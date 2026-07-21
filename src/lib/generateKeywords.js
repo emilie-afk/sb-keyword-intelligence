@@ -93,6 +93,19 @@ function isIndividualPlant(query) {
   return INDIVIDUAL_PLANT_TERMS.some(term => q.includes(term))
 }
 
+// GSC queries implying products we don't sell — exclude from ad keywords
+const NONEXISTENT_PRODUCT_TERMS = [
+  'cactus subscription',
+  'cactus box',
+  'cactus monthly',
+  'cactus club',
+]
+
+function isNonexistentProduct(query) {
+  const q = query.toLowerCase()
+  return NONEXISTENT_PRODUCT_TERMS.some(term => q.includes(term))
+}
+
 // Generate all match type variants for a single keyword
 function makeMatchTypes(keyword, category, source, isGapCategory) {
   return [
@@ -116,7 +129,7 @@ export function buildAdKeywords(processedQueries, categoryStats) {
     // 1. GSC queries that have buying intent, are not informational, and are not
     //    individual plant names (low AOV — bid on category terms instead)
     const gscBuying = (stats?.topBuyingQueries || [])
-      .filter(q => !q.isInformational && !isIndividualPlant(q.query))
+      .filter(q => !q.isInformational && !isIndividualPlant(q.query) && !isNonexistentProduct(q.query))
       .slice(0, 10)
     for (const q of gscBuying) {
       const cleanKeyword = q.query.replace(/["\[\]]/g, '').trim()
