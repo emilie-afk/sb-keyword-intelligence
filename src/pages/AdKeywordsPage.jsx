@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { downloadKeywordsCSV, downloadCategoryCSV } from '../lib/download'
 import { saveAnalysis } from '../lib/supabase'
+import { generateKeywordsAndHeadlines } from '../lib/generateKeywords'
 
 const ORDERED_CATS = ['Succulents', 'Houseplants', 'Succulent Subscription', 'Gift Boxes', 'Air Plants']
 
@@ -18,20 +19,35 @@ const MATCH_TYPE_LABELS = {
   exact: { label: 'Exact', color: '#008300' },
 }
 
-export default function AdKeywordsPage({ keywords, rawData, uploadMeta }) {
+export default function AdKeywordsPage({ keywords, setKeywords, rawData, uploadMeta }) {
   const [catFilter, setCatFilter] = useState('All')
   const [matchFilter, setMatchFilter] = useState('All')
   const [sourceFilter, setSourceFilter] = useState('All')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState(null)
+  const [generating, setGenerating] = useState(false)
+  const [genError, setGenError] = useState(null)
+
+  const hasHeadlines = keywords?.some(k => k.headlines?.length > 0)
+
+  const handleGenerateHeadlines = async () => {
+    setGenerating(true)
+    setGenError(null)
+    try {
+      const result = await generateKeywordsAndHeadlines(keywords)
+      setKeywords(result)
+    } catch (err) {
+      setGenError(`Failed: ${err.message}`)
+    } finally {
+      setGenerating(false)
+    }
+  }
 
   if (!keywords || keywords.length === 0) {
     return (
       <div className="page">
-        <div className="empty-state">
-          <p>No keywords generated yet. Go to Analysis and click "Generate Ad Keywords".</p>
-        </div>
+        <div className="empty-state"><p>Load data first to see keywords.</p></div>
       </div>
     )
   }
@@ -93,6 +109,15 @@ export default function AdKeywordsPage({ keywords, rawData, uploadMeta }) {
           <strong>Gap categories ({gapCats.join(', ')}):</strong> These have low organic buying-intent data, so suggested keywords were added to fill them out. They're marked "Suggested" in the Source column.
         </div>
       )}
+
+      {/* Generate headlines */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+        <button className="btn-primary" onClick={handleGenerateHeadlines} disabled={generating}>
+          {generating ? 'Generating AI headlines…' : hasHeadlines ? '↺ Regenerate headlines' : '✦ Generate AI headlines'}
+        </button>
+        {genError && <div className="error-box" style={{ margin: 0 }}>{genError}</div>}
+        {hasHeadlines && !generating && <span style={{ fontSize: 12, color: '#898781' }}>Headlines generated</span>}
+      </div>
 
       {/* Actions */}
       <div className="section-header">
