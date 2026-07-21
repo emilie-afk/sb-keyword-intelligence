@@ -33,28 +33,27 @@ const CURATED_KEYWORDS = {
     'air plants for sale',
     'tillandsia for sale',
     'air plant gift',
-    'air plant subscription box',
     'where to buy air plants',
     'air plants delivered',
-    'air plant set',
+    'air plant terrarium kit',
     'tillandsia shop',
     'low maintenance air plants',
   ],
   'Gift Boxes': [
     'succulent gift box',
-    'succulent gifts',
-    'plant gift box',
-    'succulent gift set',
+    'birthday succulent gift box',
+    'thinking of you gift with plant',
+    'thank you gift box with succulent',
     "mother's day succulent gift",
-    'birthday succulent gift',
-    'succulent gift basket',
-    'succulent gift delivery',
-    'plant gift for her',
-    'succulent gift ideas',
+    'succulent gift for her',
+    'plant sympathy gift',
+    'pet memorial gift with plant',
+    'succulent arrangement gift',
+    'air plant terrarium gift',
+    'unique plant gift',
     'send succulents as a gift',
-    'plant gift for mom',
-    'unique plant gifts',
-    'get well soon plant gift',
+    'succulent gift set',
+    'plant gift delivered',
   ],
   'Succulent Subscription': [
     'succulent subscription box',
@@ -62,12 +61,36 @@ const CURATED_KEYWORDS = {
     'succulent of the month club',
     'plant subscription box',
     'best succulent subscription',
-    'monthly cactus box',
     'succulent subscription service',
     'succulent delivery monthly',
     'plant of the month club',
-    'cactus subscription box',
   ],
+}
+
+// Specific plant names that should NOT become ad keywords on their own.
+// We bid on category-level terms ("succulents for sale"), not individual cultivars
+// ("string of pearls for sale", "pothos for sale") — low AOV, wrong intent level.
+const INDIVIDUAL_PLANT_TERMS = [
+  'pothos', 'philodendron', 'monstera', 'fern', 'spider plant', 'snake plant',
+  'peace lily', 'fiddle', 'zz plant', 'rubber plant', 'money tree', 'orchid',
+  'bromeliad', 'calathea', 'dracaena', 'hoya', 'pink princess', 'golden crocodile',
+  'curly spider', 'callisia', 'purple heart', 'frizzle sizzle', 'adenium',
+  'calandiva', 'bird of paradise', 'alocasia', 'anthurium', 'begonia', 'coleus',
+  'croton', 'peperomia', 'pilea', 'tradescantia', 'turtle vine', 'pink lady',
+  'ruby necklace', 'ric rac', 'pigs ear', 'dancing bones', 'string of pearls',
+  'string of hearts', 'string of dolphins', 'string of bananas', 'string of',
+  'cebu blue', 'ivy plant', 'ivy plants',
+  'echeveria', 'sedum', 'sempervivum', 'lithops', 'crassula', 'euphorbia',
+  'gasteria', 'portulacaria', 'elephant bush', 'zebra plant', 'bear paw',
+  'black rose succulent', 'split rock', 'dinosaur back', 'baby toes', 'cotyledon',
+  'dolphin plant', 'aeonium', 'senecio', 'tephrocactus', 'albuca',
+  'graptosedum', 'graptoveria', 'pachyphytum', 'graptopetalum', 'mammillaria',
+  'opuntia', 'cereus', 'calico kitten', 'haworthia',
+]
+
+function isIndividualPlant(query) {
+  const q = query.toLowerCase()
+  return INDIVIDUAL_PLANT_TERMS.some(term => q.includes(term))
 }
 
 // Generate all match type variants for a single keyword
@@ -90,11 +113,10 @@ export function buildAdKeywords(processedQueries, categoryStats) {
     const stats = categoryStats[cat]
     const isGap = stats?.isGap || false
 
-    // 1. GSC queries that have buying intent AND are not informational (care guides, how-tos)
-    //    Capped at 10 per category — skips individual plant name-only queries automatically
-    //    since those rarely have buying signals
+    // 1. GSC queries that have buying intent, are not informational, and are not
+    //    individual plant names (low AOV — bid on category terms instead)
     const gscBuying = (stats?.topBuyingQueries || [])
-      .filter(q => !q.isInformational)
+      .filter(q => !q.isInformational && !isIndividualPlant(q.query))
       .slice(0, 10)
     for (const q of gscBuying) {
       const cleanKeyword = q.query.replace(/["\[\]]/g, '').trim()
