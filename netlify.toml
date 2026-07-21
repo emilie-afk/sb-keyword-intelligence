@@ -3,6 +3,9 @@
   publish = "dist"
   functions = "netlify/functions"
 
+[functions]
+  timeout = 26
+
 # Redirect all routes to index.html so React handles navigation
 [[redirects]]
   from = "/*"
