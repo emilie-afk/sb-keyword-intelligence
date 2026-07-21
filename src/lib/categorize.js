@@ -57,6 +57,23 @@ const BUYING_INTENT_KEYWORDS = [
   'near me', 'discount', 'deal', 'best place', 'where can i', 'how much', 'gift',
 ]
 
+// Queries containing these signals are care/informational — not good ad targets
+const INFORMATIONAL_SIGNALS = [
+  'how to', 'how do', 'how do i', 'why is', 'why are', 'why does',
+  'what is', 'what are', 'what does',
+  'care for', 'care guide', 'care tips', 'care and', 'caring for',
+  'propagat', 'repot', 'repotting',
+  'dying', 'dying?', 'dead', 'yellow', 'brown', 'mushy', 'drooping', 'wilting',
+  'overwater', 'underwater', 'sunburn', 'etiolated', 'leggy',
+  'spots on', 'spots ',
+  'dormant', 'dormancy',
+  'toxic', 'safe for', 'pet safe', 'cat safe', 'dog safe',
+  'identify', 'identification', 'types of', 'varieties of',
+  'difference between', ' vs ', 'versus',
+  'when to', 'how often', 'soil for', 'water ', 'watering',
+  'fertilize', 'fertilizer', 'light for', 'sunlight',
+]
+
 // A category is considered a "gap" if it has few buying-intent queries
 // relative to its total search volume
 const GAP_THRESHOLDS = {
@@ -76,7 +93,17 @@ export function categorizeQuery(query) {
 
 export function hasBuyingIntent(query) {
   const q = query.toLowerCase()
-  return BUYING_INTENT_KEYWORDS.some(kw => q.includes(kw))
+  return BUYING_INTENT_KEYWORDS.some(kw => {
+    // Use word boundaries so 'pot' doesn't match 'spots' or 'repot'
+    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`\\b${escaped}\\b`).test(q)
+  })
+}
+
+// Returns true for care guides, how-tos, troubleshooting — not good ad targets
+export function isInformational(query) {
+  const q = query.toLowerCase()
+  return INFORMATIONAL_SIGNALS.some(signal => q.includes(signal))
 }
 
 // Process raw GSC rows into enriched, categorized query objects
@@ -85,6 +112,7 @@ export function processQueries(rawRows) {
     ...row,
     category: categorizeQuery(row.query),
     buyingIntent: hasBuyingIntent(row.query),
+    isInformational: isInformational(row.query),
     isBranded: BRAND_TERMS.some(t => row.query.toLowerCase().includes(t)),
   }))
 }
