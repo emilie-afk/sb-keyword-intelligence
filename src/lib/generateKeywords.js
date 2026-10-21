@@ -73,27 +73,55 @@ export function buildAdKeywords(processedQueries, categoryStats) {
   return keywords
 }
 
-// Generate additional keywords for all categories + headlines via Claude
-// Returns the full merged keyword list (GSC + AI-generated) with headlines attached
-export async function generateKeywordsAndHeadlines(gscKeywords) {
-  const gscBroad = gscKeywords.filter(k => k.matchType === 'broad')
-
+// Call the Netlify function and always come back with a readable error,
+// even when the server returns an HTML error page (timeout, password wall, etc.)
+async function callFunction(payload) {
   const response = await fetch('/.netlify/functions/generate-headlines', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ gscKeywords: gscBroad }),
+    body: JSON.stringify(payload),
   })
-
-  if (!response.ok) {
-    const err = await response.json()
-    throw new Error(err.error || 'Failed to generate keywords')
+  const text = await response.text()
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch {
+    if (response.status === 504) throw new Error('The server timed out (504). Please try again.')
+    throw new Error(`Unexpected server response (HTTP ${response.status})`)
   }
+  if (!response.ok) throw new Error(data.error || `Server error (HTTP ${response.status})`)
+  return data
+}
 
-  const { suggestedKeywords, headlineMap } = await response.json()
+// Generate additional keywords for all categories + headlines via Claude
+// Returns the full merged keyword list (GSC + AI-generated) with headlines attached.
+// Work is split into several short requests so none hits Netlify's function time limit.
+export async function generateKeywordsAndHeadlines(gscKeywords) {
+  const gscBroad = gscKeywords
+    .filter(k => k.matchType === 'broad')
+    .map(({ keyword, category }) => ({ keyword, category }))
+
+  // Step 1: suggested keywords (one call)
+  const { suggestedKeywords = [] } = await callFunction({ mode: 'suggest', gscKeywords: gscBroad })
+
+  // Step 2: headlines in batches of 10, max 4 requests at a time
+  const allBroad = [...gscBroad, ...suggestedKeywords.map(({ keyword, category }) => ({ keyword, category }))]
+  const BATCH_SIZE = 10
+  const batches = []
+  for (let i = 0; i < allBroad.length; i += BATCH_SIZE) batches.push(allBroad.slice(i, i + BATCH_SIZE))
+
+  const headlineMap = {}
+  const CONCURRENCY = 4
+  for (let i = 0; i < batches.length; i += CONCURRENCY) {
+    const results = await Promise.all(
+      batches.slice(i, i + CONCURRENCY).map(b => callFunction({ mode: 'headlines', keywords: b }))
+    )
+    for (const r of results) Object.assign(headlineMap, r.headlineMap || {})
+  }
 
   // Expand suggested keywords to all 3 match types
   const suggestedAll = []
-  for (const kw of (suggestedKeywords || [])) {
+  for (const kw of suggestedKeywords) {
     suggestedAll.push(kw)
     suggestedAll.push({ ...kw, keyword: `"${kw.keyword}"`, matchType: 'phrase' })
     suggestedAll.push({ ...kw, keyword: `[${kw.keyword}]`, matchType: 'exact' })
