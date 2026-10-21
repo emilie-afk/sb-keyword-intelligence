@@ -43,6 +43,7 @@ export const BRAND_CONTEXT = `Succulents Box (succulentsbox.com) sells:
 // Sources — observed GSC queries and AI expansions must always stay distinguishable
 export const SOURCES = {
   gsc_observed: 'Observed GSC query',
+  gsc_derived: 'Derived from GSC query',
   ai_expansion: 'AI expansion',
   manual: 'Added manually',
 }
@@ -126,13 +127,21 @@ function plantTermsIn(text) {
   return INDIVIDUAL_PLANT_TERMS.filter(term => t.includes(term))
 }
 
+// Google Ads keyword limits: 80 characters and 10 words
+export const ADS_KEYWORD_MAX_CHARS = 80
+export const ADS_KEYWORD_MAX_WORDS = 10
+export function exceedsAdsKeywordLimits(keyword) {
+  const k = normalizeKeyword(keyword)
+  return k.length > ADS_KEYWORD_MAX_CHARS || k.split(' ').length > ADS_KEYWORD_MAX_WORDS
+}
+
 // Returns { ok: boolean, reason?: string }.
 // mode: 'category' | 'collection' | 'product'
 // contextText: page title/description/selected product names (collection/product modes)
 export function checkKeywordEligibility(keyword, mode, contextText = '') {
   const k = normalizeKeyword(keyword)
   if (!k) return { ok: false, reason: 'empty' }
-  if (k.split(' ').length > 10) return { ok: false, reason: 'too long' }
+  if (exceedsAdsKeywordLimits(k)) return { ok: false, reason: 'too long for Google Ads (max 80 characters / 10 words)' }
   if (NONEXISTENT_PRODUCT_TERMS.some(t => k.includes(t))) return { ok: false, reason: 'product we do not sell' }
   if (isInformational(k)) return { ok: false, reason: 'informational query' }
 

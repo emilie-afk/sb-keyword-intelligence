@@ -130,7 +130,7 @@ FACTS (the only information you may rely on for relevance and claims):
 ${buildFacts(adGroup)}
 
 REAL SEARCH QUERIES from Google Search Console for this target (numbered). These are the starting point:
-${seeds.map((s, i) => `${i + 1}. ${s.query}${s.scope === 'page' ? '  [searched for this page]' : ''}`).join('\n')}
+${seeds.map((s, i) => `${i + 1}. ${s.query}${s.scope === 'page' ? '  [searched for this page]' : s.scope === 'derived' ? '  [theme derived from a longer real query]' : ''}`).join('\n')}
 
 ${avoid.length ? `Keywords already in this ad group (do not repeat or trivially reword them):\n${avoid.slice(0, 80).map(s => `- ${s}`).join('\n')}\n` : ''}
 Write up to ${count} keyword EXPANSIONS derived from the real queries above:
@@ -184,7 +184,7 @@ export async function generateKeywords({ adGroup, seeds = [], avoid = [], count 
   validateAdGroup(adGroup)
   const seedList = (Array.isArray(seeds) ? seeds : [])
     .map(s => (typeof s === 'string' ? { query: s, scope: 'site-wide' } : s))
-    .map(s => ({ query: clip(s.query, 120), scope: s.scope === 'page' ? 'page' : 'site-wide', base: normalizeKeyword(s.query) }))
+    .map(s => ({ query: clip(s.query, 120), scope: ['page', 'derived'].includes(s.scope) ? s.scope : 'site-wide', base: normalizeKeyword(s.query) }))
     .filter(s => s.base)
     .slice(0, 40)
   if (seedList.length === 0) {

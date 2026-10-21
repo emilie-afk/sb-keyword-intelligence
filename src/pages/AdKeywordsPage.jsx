@@ -6,7 +6,7 @@ import {
   ensureCategoryGroups, categoryGroupIds, createPageGroup, pageSnapshot, guessCategory, updateGroup,
   removeGroup, runKeywordGeneration, buildHeadlineBatches, runHeadlineBatches, projectRows, filterRows,
   removeKeywords, setMatchType, editKeyword, mergeKeywords, findSeeds, setSeedSelection, addManualSeed,
-  selectedSeeds, datasetRef, scopeLabel, evidenceProblem,
+  selectedSeeds, datasetRef, scopeLabel, evidenceProblem, addDerivedSeed,
 } from '../lib/workspace'
 import { api } from '../lib/api'
 import { saveProject } from '../lib/supabase'
@@ -20,7 +20,7 @@ const MODES = [
   { id: 'product', label: 'By product page' },
 ]
 const MATCH_LABELS = { broad: { label: 'Broad', color: '#888780' }, phrase: { label: 'Phrase', color: '#2a78d6' }, exact: { label: 'Exact', color: '#008300' } }
-const SOURCE_BADGE = { gsc_observed: 'badge-gsc', ai_expansion: 'badge-suggested', manual: 'badge-info' }
+const SOURCE_BADGE = { gsc_observed: 'badge-gsc', gsc_derived: 'badge-gap', ai_expansion: 'badge-suggested', manual: 'badge-info' }
 const MAX_ROWS = 300
 
 // dataset = { queries, source, dateStart, dateEnd, uploadId } | null
@@ -319,7 +319,7 @@ export default function AdKeywordsPage({
           <div className="step-label">3 · Review GSC evidence per ad group, then generate</div>
           <div className="group-grid">
             {project.adGroups.map(g => {
-              const counts = { gsc_observed: 0, ai_expansion: 0, manual: 0 }
+              const counts = { gsc_observed: 0, gsc_derived: 0, ai_expansion: 0, manual: 0 }
               g.keywords.forEach(k => { counts[k.source] = (counts[k.source] || 0) + 1 })
               const run = g.status?.lastRun
               const urlOk = isAllowedStoreHost(g.landingUrl)
@@ -342,14 +342,14 @@ export default function AdKeywordsPage({
                     {g.seedStatus?.pageLevel?.status === 'ok' && ` · ${g.seedStatus.pageLevel.count} page-level`}
                   </div>
                   <div className="group-stats">
-                    {g.keywords.length} keywords · {counts.gsc_observed} observed · {counts.ai_expansion} AI expansions · {counts.manual} manual
+                    {g.keywords.length} keywords · {counts.gsc_observed} observed{counts.gsc_derived ? ` · ${counts.gsc_derived} derived` : ''} · {counts.ai_expansion} AI expansions · {counts.manual} manual
                   </div>
                   {g.seedStatus?.state === 'done' && g.seeds.length === 0 && !evidenceProblem(g, dataset)?.includes('changed') && <div className="hint-gap">No relevant GSC evidence found yet.</div>}
                   {(g.seedStatus?.state === 'error' || evidenceProblem(g, dataset)?.includes('changed')) && <div className="hint-bad">{evidenceProblem(g, dataset)}</div>}
                   {g.status?.keywords === 'loading' && <div className="status-text">Generating keywords…</div>}
                   {g.status?.keywords === 'error' && <div className="hint-bad">{g.status.error}</div>}
                   {g.status?.keywords === 'done' && run && (
-                    <div className="status-text">Last run: +{run.observedAdded} observed queries, +{run.aiAdded} AI expansions{run.rejected ? ` (${run.rejected} filtered out)` : ''}</div>
+                    <div className="status-text">Last run: +{run.observedAdded} observed queries, +{run.aiAdded} AI expansions{run.rejected ? ` (${run.rejected} filtered out)` : ''}{run.observedSkipped ? ` · ${run.observedSkipped} selected quer${run.observedSkipped === 1 ? 'y' : 'ies'} too long to be a Google Ads keyword` : ''}</div>
                   )}
                   <div className="manual-row">
                     <input className="input" placeholder="Add a keyword manually" value={manualInputs[g.id] || ''}
@@ -404,6 +404,7 @@ export default function AdKeywordsPage({
               }}
               onToggleSeeds={(ids, on) => setP(p => setSeedSelection(p, activeGroup.id, ids, on))}
               onAddManual={row => setP(p => addManualSeed(p, activeGroup.id, row, dataset))}
+              onAddDerived={(seedId, text) => setP(p => addDerivedSeed(p, activeGroup.id, seedId, text))}
               onSetAliases={aliases => { setP(p => updateGroup(p, activeGroup.id, g => ({ ...g, aliases }))); runFindSeeds([activeGroup.id]) }}
               onGenerate={() => generateForGroups([activeGroup.id])}
             />
@@ -511,6 +512,8 @@ export default function AdKeywordsPage({
                           </span>
                         ) : r.source === 'ai_expansion' && r.seedRefs.length ? (
                           <span className="muted" title={r.seedRefs.join(' | ')}>from: {r.seedRefs.join(', ')}</span>
+                        ) : r.derivedFrom ? (
+                          <span className="muted" title={r.derivedFrom}>derived from a long GSC query (no metrics): "{r.derivedFrom.slice(0, 60)}…"</span>
                         ) : r.editedFrom ? (
                           <span className="muted" title="Edited wording was not observed in GSC, so the original metrics are not shown">edited from: {r.editedFrom} (no metrics)</span>
                         ) : <span className="muted">—</span>}

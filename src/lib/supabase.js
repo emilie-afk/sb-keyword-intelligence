@@ -86,7 +86,8 @@ export function projectKeywordRows(project, projectId) {
           source: k.source,
           is_gap_category: false,
           // Evidence: metrics only for observed GSC queries; AI expansions list their seed queries
-          seed_queries: k.source === 'ai_expansion' ? (k.seedRefs || []) : null,
+          // AI expansions: their seed queries. Derived themes: the long GSC query they came from.
+          seed_queries: k.source === 'ai_expansion' ? (k.seedRefs || []) : k.source === 'gsc_derived' && k.derivedFrom ? [k.derivedFrom] : null,
           edited_from: k.editedFrom || null,
           gsc_scope: ev?.scope || null,
           gsc_clicks: ev ? ev.clicks : null,
@@ -211,7 +212,8 @@ export function normalizeKeywordRow(k) {
     headlines: [k.headline_1, k.headline_2, k.headline_3].filter(Boolean),
     headlineStatus: '',
     headlineIssues: [],
-    seedRefs: k.seed_queries || [],
+    seedRefs: normalizeSource(k.source) === 'ai_expansion' ? (k.seed_queries || []) : [],
+    derivedFrom: normalizeSource(k.source) === 'gsc_derived' ? (k.seed_queries?.[0] || null) : null,
     editedFrom: k.edited_from || null,
     evidence: k.gsc_scope ? {
       scope: k.gsc_scope, clicks: k.gsc_clicks, impressions: k.gsc_impressions, ctr: k.gsc_ctr ?? 0,

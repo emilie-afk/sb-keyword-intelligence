@@ -6,7 +6,7 @@
 // description), not from the five category labels, so queries can match across categories.
 
 import {
-  INDIVIDUAL_PLANT_TERMS, NONEXISTENT_PRODUCT_TERMS, isInformational, normalizeKeyword, CATEGORY_DESCRIPTIONS,
+  INDIVIDUAL_PLANT_TERMS, NONEXISTENT_PRODUCT_TERMS, isInformational, exceedsAdsKeywordLimits, normalizeKeyword, CATEGORY_DESCRIPTIONS,
 } from '../shared/keywordRules.js'
 import { CATEGORY_KEYWORDS, BRAND_TERMS } from './categorize.js'
 
@@ -150,6 +150,8 @@ export function matchQuery(query, profile, level = 'strict') {
 export function seedFlags(query, mode, contextText = '') {
   const q = normalizeKeyword(query)
   const flags = []
+  // Queries over Google Ads' keyword limits (length alone says nothing about where they came from)
+  if (exceedsAdsKeywordLimits(q)) flags.push('too long')
   // "x care" is a care query, but "plant care pack/kit" is a product
   const careQuery = /\bcare\b(?!\s*(pack|packs|kit|kits|package|set|bundle|box|gift))/.test(q)
   if (isInformational(q) || careQuery) flags.push('informational')
@@ -172,6 +174,7 @@ export const FLAG_LABELS = {
   'not sold': 'Product we don\'t sell',
   'individual plant': 'Individual plant name',
   'other plant': 'Plant not in this target',
+  'too long': 'Long query: extract a shorter theme before using for ads',
 }
 
 let seq = 0
@@ -282,4 +285,46 @@ export function searchDataset(queries, text, limit = 20) {
   if (q.length < 2) return []
   return (queries || []).filter(r => normalizeKeyword(r.query).includes(q))
     .sort((a, b) => b.impressions - a.impressions).slice(0, limit)
+}
+
+// ── Derived themes ──
+// Long, paragraph-like queries can't be keywords. A short theme can be
+// extracted from them, but it is a DERIVED suggestion: it has no metrics of its own and never
+// inherits the original query's impressions, clicks or position.
+
+const LEAD_WORDS = new Set(`what which where who how why when are is was do does did can could should would will
+the a an some any best good great top recommended recommend recommends people person i me my we you your
+get buy find give send choose pick there here that this these those to for`.split(/\s+/))
+const FILLER_PHRASES = [/\bdo people recommend\b/g, /\bpeople recommend\b/g, /\bwould you recommend\b/g,
+  /\bcan i (buy|get|send)\b/g, /\bshould i (buy|get|send)\b/g, /\bis (a )?good\b/g, /\bare (the )?best\b/g]
+
+// Suggest a short theme (≤ 6 words) from a long query: the last question or sentence, minus question words
+export function suggestTheme(query) {
+  const sentences = String(query || '').split(/[.?!\n:;]+/).map(x => x.trim()).filter(Boolean)
+  // Long queries often end in a question with no punctuation before it ("…quality of products what gift
+  // baskets do people recommend…"), so start at the LAST question word in the last sentence.
+  let text = (sentences[sentences.length - 1] || '').replace(/^[-–•\s]+/, '').toLowerCase()
+  // ("who" only counts at the start — mid-sentence it is usually "…for mom who loves…")
+  const qWords = [...text.matchAll(/\b(what|which|where|how)\b|^who\b/g)]
+  if (qWords.length) text = text.slice(qWords[qWords.length - 1].index)
+  for (const re of FILLER_PHRASES) text = text.replace(re, ' ')
+  let words = normalizeKeyword(text).split(' ').filter(Boolean)
+  while (words.length && LEAD_WORDS.has(words[0])) words.shift()
+  words = words.slice(0, 6)
+  while (words.length && LEAD_WORDS.has(words[words.length - 1])) words.pop()
+  return words.join(' ')
+}
+
+// A derived seed: user-confirmed theme, linked to the long query it came from, with NO evidence
+export function makeDerivedSeed(source, themeText, mode, contextText) {
+  const pe = primaryEvidence(source)
+  const seed = makeSeed({
+    query: normalizeKeyword(themeText),
+    evidence: [],
+    reasons: [`derived from a long GSC query (${pe ? `${pe.impressions} impr., ${pe.clicks} clicks` : 'no metrics'}) — the theme has no metrics of its own`],
+    origin: 'derived',
+    mode,
+    contextText,
+  })
+  return { ...seed, derivedFrom: source.query, selected: true }
 }

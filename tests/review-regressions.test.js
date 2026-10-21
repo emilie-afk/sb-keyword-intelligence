@@ -4,10 +4,10 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import {
   createStore, newProject, createPageGroup, ensureCategoryGroups, findSeeds, runKeywordGeneration, updateGroup,
   setSeedSelection, addManualSeed, editKeyword, evidenceProblem, projectRows, rowsToCsv, serializeProject,
-  deserializeProject, buildHeadlineBatches, runHeadlineBatches, datasetRef,
+  deserializeProject, buildHeadlineBatches, runHeadlineBatches, datasetRef, addDerivedSeed,
 } from '../src/lib/workspace.js'
 import { processQueries } from '../src/lib/categorize.js'
-import { primaryEvidence } from '../src/lib/seedMatching.js'
+import { primaryEvidence, suggestTheme, FLAG_LABELS } from '../src/lib/seedMatching.js'
 import { queryAllRows, fetchPageQueries, GscError } from '../src/lib/gscApi.js'
 import { saveProject, setClient, projectKeywordRows } from '../src/lib/supabase.js'
 import { mockApi, mockSupabase, jsonResponse } from './helpers.js'
@@ -373,5 +373,100 @@ describe('follow-ups to the reviewed build', () => {
     store.setProject(p => updateGroup(p, g.id, x => ({ ...x, seedStatus: { ...x.seedStatus, state: 'none', requestId: 'reset' } })))
     const replaced = apiDataset(SITE.map(r => ({ ...r, clicks: r.clicks + 1 })))
     expect(evidenceProblem(g0(), replaced)).toMatch(/dataset or reporting period changed/)
+  })
+})
+
+describe('long queries in GSC data', () => {
+  // The full query from the screenshot (a long, paragraph-like query that ends in a question)
+  const PROMPT = "i am a 25-34 or 35-44 year old female. my main motivations: they are often millennial parents who are always on the hunt for something perfect, that ticks all their boxes, and that takes time - but to them, shopping is a labor of love. they love to be inspired and use pinterest, tiktok and instagram for that purpose. they value items and experiences with the human touch and like to indulge their kids with little extras. their favorite part of shopping is finding hidden gems. and they are informed – seeking advice before making purchases. my main pain points: - i have no need to buy anything - i'm happy with the websites i use at the moment - i don't have a need for the items they sell - at the moment i have less money to spend on non-essentials - the products are expensive - unsure about the quality of products what gift baskets do people recommend for grandparents"
+
+  it('long prompt-like queries stay visible but are flagged and unselected', async () => {
+    const ds = apiDataset([row('gift baskets for grandparents', 1, 30), row(PROMPT, 0, 2, 1)])
+    store.setProject(p => ensureCategoryGroups(p, ['Gift Boxes']))
+    await findSeeds({ groupId: g0().id, ...ctx(), dataset: ds })
+    const prompt = g0().seeds.find(s => s.query === PROMPT)
+    expect(prompt).toMatchObject({ selected: false })
+    expect(prompt.flags).toContain('too long')
+    expect(FLAG_LABELS['too long']).toBe('Long query: extract a shorter theme before using for ads')
+    expect(g0().seeds.find(s => s.query === 'gift baskets for grandparents').selected).toBe(true)
+  })
+
+  it('suggests a short theme from the question at the end of the prompt', () => {
+    expect(suggestTheme(PROMPT)).toBe('gift baskets for grandparents')
+    expect(suggestTheme('Which plant gifts are best for a new mom?')).toBe('plant gifts for a new mom')
+    expect(suggestTheme('what is a good succulent gift for a coworker')).toBe('succulent gift for a coworker')
+    expect(suggestTheme('birthday gift ideas for mom who loves gardening and has everything')).toBe('birthday gift ideas for mom')
+  })
+
+  it('a selected long query alone cannot be used; generation asks for a theme and makes no AI call', async () => {
+    const ds = apiDataset([row(PROMPT, 0, 2, 1)])
+    store.setProject(p => ensureCategoryGroups(p, ['Gift Boxes']))
+    await findSeeds({ groupId: g0().id, ...ctx(), dataset: ds })
+    store.setProject(p => setSeedSelection(p, g0().id, g0().seeds.map(s => s.id), true))
+    expect(evidenceProblem(g0(), ds)).toMatch(/too long .* extract a short theme/)
+    const api = mockApi()
+    const [o] = await runKeywordGeneration({ groupIds: [g0().id], ...ctx(), api, dataset: ds })
+    expect(o.ok).toBe(false)
+    expect(api.calls.keywords).toHaveLength(0)
+  })
+
+  it('a derived theme is labelled, linked to its source, and never inherits the source metrics', async () => {
+    const ds = apiDataset([row('gift baskets for grandparents', 1, 30), row(PROMPT, 0, 2, 1)])
+    store.setProject(p => ensureCategoryGroups(p, ['Gift Boxes']))
+    await findSeeds({ groupId: g0().id, ...ctx(), dataset: ds })
+    const long = g0().seeds.find(s => s.query === PROMPT)
+    store.setProject(p => addDerivedSeed(p, g0().id, long.id, 'Plant gifts for grandparents'))
+    const derived = g0().seeds.find(s => s.origin === 'derived')
+    expect(derived).toMatchObject({ query: 'plant gifts for grandparents', evidence: [], selected: true, derivedFrom: PROMPT })
+    expect(derived.reasons[0]).toMatch(/derived from a long GSC query \(2 impr\., 0 clicks\) — the theme has no metrics of its own/)
+    expect(g0().seeds.find(s => s.id === long.id)).toMatchObject({ selected: false, evidence: [expect.objectContaining({ impressions: 2, position: 1 })] })
+
+    const api = mockApi({ keywordsFor: () => [{ keyword: 'grandparent plant gift basket', seedRefs: ['plant gifts for grandparents'] }] })
+    await runKeywordGeneration({ groupIds: [g0().id], ...ctx(), api, dataset: ds })
+    const sent = api.calls.keywords[0].seeds
+    expect(sent).toEqual(expect.arrayContaining([{ query: 'plant gifts for grandparents', scope: 'derived' }]))
+    expect(sent.some(x => x.query === PROMPT)).toBe(false)
+    const kw = g0().keywords.find(k => k.base === 'plant gifts for grandparents')
+    expect(kw).toMatchObject({ source: 'gsc_derived', evidence: [], derivedFrom: PROMPT })
+    expect(g0().keywords.find(k => k.source === 'ai_expansion').seedRefs).toEqual(['plant gifts for grandparents'])
+
+    const r = projectRows(store.getProject()).find(x => x.keywordId === kw.id)
+    expect(r.evidence).toBeNull()
+    const line = rowsToCsv([r]).split('\n')[1]
+    expect(line).toContain('"Derived from GSC query"')
+    expect(line).toContain(`"${PROMPT}"`)
+    expect(line.endsWith('"","","","","",""')).toBe(true) // no scope, metrics or period
+    const mirror = projectKeywordRows(store.getProject(), 'p1').find(m => m.base_keyword === 'plant gifts for grandparents')
+    expect(mirror).toMatchObject({ source: 'gsc_derived', seed_queries: [PROMPT], gsc_clicks: null, gsc_impressions: null, gsc_position: null, gsc_scope: null })
+  })
+
+  it('derived themes survive re-matching and saving, and are dropped if the source query leaves the dataset', async () => {
+    const ds = apiDataset([row('gift baskets for grandparents', 1, 30), row(PROMPT, 0, 2, 1)])
+    store.setProject(p => ensureCategoryGroups(p, ['Gift Boxes']))
+    await findSeeds({ groupId: g0().id, ...ctx(), dataset: ds })
+    store.setProject(p => addDerivedSeed(p, g0().id, g0().seeds.find(s => s.query === PROMPT).id, 'plant gifts for grandparents'))
+    await findSeeds({ groupId: g0().id, ...ctx(), dataset: ds, level: 'broad' })
+    expect(g0().seeds.filter(s => s.origin === 'derived')).toHaveLength(1)
+    const reopened = deserializeProject({ id: 'x', name: 'n', mode: 'category', data: serializeProject(store.getProject()) })
+    expect(reopened.adGroups[0].seeds.find(s => s.origin === 'derived')).toMatchObject({ derivedFrom: PROMPT, evidence: [] })
+    await findSeeds({ groupId: g0().id, ...ctx(), dataset: apiDataset([row('gift baskets for grandparents', 1, 30)]) })
+    expect(g0().seeds.some(s => s.origin === 'derived')).toBe(false)
+  })
+})
+
+
+describe('mixed long and usable seed selection', () => {
+  it('keeps expansions and reports added observed queries when long queries are also checked', async () => {
+    const long = 'gift baskets for grandparents ' + 'with thoughtful gifts and plants '.repeat(6)
+    const ds = apiDataset([row('gift baskets for grandparents', 1, 30), row(long, 0, 2)])
+    store.setProject(p => ensureCategoryGroups(p, ['Gift Boxes']))
+    const id = g0().id
+    await findSeeds({ groupId: id, ...ctx(), dataset: ds })
+    store.setProject(p => setSeedSelection(p, id, g0().seeds.map(s => s.id), true))
+    const api = mockApi({ keywordsFor: () => [{ keyword: 'plant gift baskets for grandparents', seedRefs: ['gift baskets for grandparents'] }] })
+    await runKeywordGeneration({ groupIds: [id], ...ctx(), api, dataset: ds })
+    expect(api.calls.keywords[0].seeds.every(s => s.query !== long)).toBe(true)
+    expect(g0().keywords.some(k => k.source === 'ai_expansion')).toBe(true)
+    expect(g0().status.lastRun).toMatchObject({ observedAdded: 1, observedSkipped: 1, aiAdded: 1 })
   })
 })

@@ -12,12 +12,12 @@
 // Keyword = { id, base, source, match, headlines, headlineStatus, headlineIssues, evidence[], seedRefs[] }
 
 import {
-  CATEGORIES, CATEGORY_LANDING_PAGES, MATCH_TYPES, formatMatchType, normalizeKeyword, normalizeSource, SOURCES,
+  exceedsAdsKeywordLimits, CATEGORIES, CATEGORY_LANDING_PAGES, MATCH_TYPES, formatMatchType, normalizeKeyword, normalizeSource, SOURCES,
 } from '../shared/keywordRules.js'
 import { categorizeQuery } from './categorize.js'
 import { mapLimit } from './api.js'
 import {
-  findSiteWideSeeds, pageSeeds, mergeSeedLists, makeSeed, evidenceFrom, primaryEvidence, targetContextText,
+  findSiteWideSeeds, pageSeeds, mergeSeedLists, makeSeed, evidenceFrom, primaryEvidence, targetContextText, makeDerivedSeed,
 } from './seedMatching.js'
 
 let counter = 0
@@ -83,6 +83,7 @@ export function newKeyword(base, source, extra = {}) {
     evidence: [], // GSC evidence — only ever set for observed queries
     seedRefs: [], // for AI expansions: the observed seed queries that support them
     editedFrom: null, // for edited observed queries: the original observed query (metrics not kept)
+    derivedFrom: null, // for derived themes: the long GSC query the theme was extracted from (metrics not kept)
     ...extra,
   }
 }
@@ -208,6 +209,7 @@ export function evidenceProblem(group, dataset) {
   if (datasetKey(st.dataset) !== datasetKey(datasetRef(dataset))) return 'The GSC dataset or reporting period changed — re-run matching to refresh the evidence.'
   if (st.target && st.target !== targetSignature(group)) return 'The target (URL, products or aliases) changed — re-run matching to refresh the evidence.'
   if (selectedSeeds(group).length === 0) return 'No selected GSC seed queries — find or select relevant queries first.'
+  if (usableSeeds(group).length === 0) return 'The selected queries are too long to use as keywords — extract a short theme from them first.'
   return null
 }
 
@@ -277,10 +279,13 @@ export async function findSeeds({ groupId, getProject, setProject, dataset, leve
     id: s.id, selected: s.selected,
   }))
   const droppedManual = manualOld.length - manual.length
+  // Derived themes stay only while the long query they came from is still in this dataset
+  const derived = (current.seeds || []).filter(s => s.origin === 'derived' && byBase.has(normalizeKeyword(s.derivedFrom)))
 
   const previous = new Map((current.seeds || []).map(s => [s.base, s]))
-  const merged = mergeSeedLists(pageList, siteList, manual).map(s => {
+  const merged = [...mergeSeedLists(pageList, siteList, manual).filter(s => !derived.some(d => d.base === s.base)), ...derived].map(s => {
     const prev = previous.get(s.base)
+    if (s.origin === 'derived') return s
     return prev ? { ...s, id: prev.id, selected: prev.selected, origin: prev.origin === 'manual' ? 'manual' : s.origin } : s
   })
 
@@ -323,6 +328,21 @@ export function addManualSeed(project, groupId, row, dataset) {
 }
 
 export const selectedSeeds = g => (g.seeds || []).filter(s => s.selected)
+// Seeds that can actually be used: queries over the Google Ads keyword limit can't (extract a theme instead)
+export const usableSeeds = g => selectedSeeds(g).filter(s => !exceedsAdsKeywordLimits(s.base))
+
+// Add a short theme extracted from a long query. The theme is labelled derived and carries no metrics;
+// the original long query keeps its own evidence and is left unselected.
+export function addDerivedSeed(project, groupId, sourceSeedId, themeText) {
+  return updateGroup(project, groupId, g => {
+    const source = g.seeds.find(s => s.id === sourceSeedId)
+    const base = normalizeKeyword(themeText)
+    if (!source || !base || exceedsAdsKeywordLimits(base)) return g
+    if (g.seeds.some(s => s.base === base)) return { ...g, seeds: g.seeds.map(s => (s.base === base ? { ...s, selected: true } : s)) }
+    const seed = makeDerivedSeed(source, base, g.mode, targetContextText(targetOf(g)))
+    return { ...g, seeds: [seed, ...g.seeds.map(s => (s.id === sourceSeedId ? { ...s, selected: false } : s))] }
+  })
+}
 
 // ── Keywords ──
 
@@ -337,8 +357,8 @@ export function mergeKeywords(group, items, source) {
     if (!base) continue
     const existing = byBase.get(base)
     if (existing) {
-      if (source === 'gsc_observed' && ['ai_expansion', 'gsc_observed'].includes(existing.source)) {
-        const upgraded = { ...existing, source, evidence: item.evidence || [], seedRefs: [] }
+      if (source === 'gsc_observed' && ['ai_expansion', 'gsc_observed', 'gsc_derived'].includes(existing.source)) {
+        const upgraded = { ...existing, source, evidence: item.evidence || [], seedRefs: [], derivedFrom: null }
         keywords = keywords.map(k => (k.id === existing.id ? upgraded : k))
         byBase.set(base, upgraded)
       }
@@ -347,6 +367,7 @@ export function mergeKeywords(group, items, source) {
     const kw = newKeyword(base, source, {
       evidence: source === 'gsc_observed' ? (item.evidence || []) : [], // AI expansions never carry metrics
       seedRefs: source === 'ai_expansion' ? (item.seedRefs || []) : [],
+      derivedFrom: source === 'gsc_derived' ? (item.derivedFrom || null) : null, // derived themes never carry metrics
     })
     keywords = [...keywords, kw]
     byBase.set(base, kw)
@@ -414,7 +435,7 @@ export function groupPayload(group) {
 }
 
 // Seeds sent to the AI: the real queries plus their scope (metrics stay on the client)
-export const seedPayload = seeds => seeds.slice(0, 40).map(s => ({ query: s.query, scope: primaryEvidence(s)?.scope || 'site-wide' }))
+export const seedPayload = seeds => seeds.slice(0, 40).map(s => ({ query: s.query, scope: s.origin === 'derived' ? 'derived' : primaryEvidence(s)?.scope || 'site-wide' }))
 
 // Generate keywords for the given ad groups only. Other groups are never touched.
 // Requires a GSC dataset and current, error-free evidence with at least one selected seed —
@@ -434,15 +455,20 @@ export async function runKeywordGeneration({ groupIds, getProject, setProject, a
     }
     const evidenceVersion = start.seedStatus.requestId
     const signature = targetSignature(start)
-    const seeds = selectedSeeds(start)
+    const seeds = usableSeeds(start)
+    const tooLong = selectedSeeds(start).length - seeds.length
     const selection = JSON.stringify(seeds.map(s => s.id).sort())
     mark(groupId, { keywords: 'loading', error: null })
 
     // 1. Selected seeds become observed keywords, with their own evidence
+    // Queries over the length limit are excluded from both keywords and AI seed payloads.
+    // Derived themes become "Derived from GSC query" keywords with no metrics.
     let observedAdded = 0
+    const observedSkipped = tooLong
     setProject(p => updateGroup(p, groupId, g => {
-      const r = mergeKeywords(g, seeds.map(s => ({ base: s.base, evidence: s.evidence })), 'gsc_observed')
-      observedAdded = r.added
+      const r1 = mergeKeywords(g, seeds.filter(x => x.origin !== 'derived').map(x => ({ base: x.base, evidence: x.evidence })), 'gsc_observed')
+      const r = mergeKeywords(r1.group, seeds.filter(x => x.origin === 'derived').map(x => ({ base: x.base, derivedFrom: x.derivedFrom })), 'gsc_derived')
+      observedAdded = r.added + r1.added
       return r.group
     }))
 
@@ -454,7 +480,7 @@ export async function runKeywordGeneration({ groupIds, getProject, setProject, a
       const res = await api.generateKeywords({ adGroup: groupPayload(group), seeds: sent, avoid: group.keywords.map(k => k.base), count })
 
       const now = getProject().adGroups.find(g => g.id === groupId)
-      if (!now || now.seedStatus?.requestId !== evidenceVersion || targetSignature(now) !== signature || JSON.stringify(selectedSeeds(now).map(s => s.id).sort()) !== selection) {
+      if (!now || now.seedStatus?.requestId !== evidenceVersion || targetSignature(now) !== signature || JSON.stringify(usableSeeds(now).map(s => s.id).sort()) !== selection) {
         if (now) mark(groupId, { keywords: 'error', error: 'The target or its evidence changed while generating — AI results were discarded. Generate again.' })
         return { groupId, added: observedAdded, discarded: true }
       }
@@ -470,7 +496,7 @@ export async function runKeywordGeneration({ groupIds, getProject, setProject, a
       setProject(p => updateGroup(p, groupId, g => {
         const r = mergeKeywords(g, items, 'ai_expansion')
         aiAdded = r.added
-        return { ...r.group, status: { keywords: 'done', error: null, lastRun: { observedAdded, aiAdded, rejected } } }
+        return { ...r.group, status: { keywords: 'done', error: null, lastRun: { observedAdded, observedSkipped, aiAdded, rejected } } }
       }))
       return { groupId, added: observedAdded + aiAdded }
     } catch (err) {
@@ -572,6 +598,7 @@ export function projectRows(project) {
           evidence: k.source === 'gsc_observed' ? primaryEvidence(k) : null,
           seedRefs: k.seedRefs || [],
           editedFrom: k.editedFrom || null,
+          derivedFrom: k.derivedFrom || null,
         })
       }
     }
@@ -602,6 +629,7 @@ export const EXPORT_COLUMNS = [
   ['Source', r => SOURCES[r.source] || r.source],
   ['Supporting GSC seed queries', r => (r.source === 'ai_expansion' ? r.seedRefs.join(' | ') : '')],
   ['Edited from GSC query', r => r.editedFrom || ''],
+  ['Derived from GSC query', r => r.derivedFrom || ''],
   ['Headline 1', r => r.headlines[0]],
   ['Headline 2', r => r.headlines[1]],
   ['Headline 3', r => r.headlines[2]],
@@ -641,12 +669,13 @@ export function serializeProject(project) {
       pageLevel: g.seedStatus?.pageLevel || null,
       seeds: (g.seeds || []).map(s => ({
         id: s.id, query: s.query, base: s.base, evidence: s.evidence, reasons: s.reasons, flags: s.flags,
-        score: s.score, origin: s.origin, selected: s.selected,
+        score: s.score, origin: s.origin, selected: s.selected, derivedFrom: s.derivedFrom || null,
       })),
       keywords: g.keywords.map(k => ({
         id: k.id, base: k.base, source: k.source, match: k.match, headlines: k.headlines,
         headlineStatus: k.headlineStatus, headlineIssues: k.headlineIssues, evidence: k.evidence, seedRefs: k.seedRefs,
         editedFrom: k.editedFrom || null,
+        derivedFrom: k.derivedFrom || null,
       })),
     })),
   }

@@ -239,3 +239,7 @@ h2 { font-size: 16px; font-weight: 500; }
 .row-muted td { color: #898781; }
 .evidence-cell { font-size: 11px; color: #52514e; max-width: 260px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @media (max-width: 700px) { .dataset-bar span[style] { margin-left: 0 !important; } }
+
+.long-query { max-height: 3.2em; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.theme-extract { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.theme-extract .input-inline { width: 240px; font-family: inherit; }

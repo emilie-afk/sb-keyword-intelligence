@@ -190,6 +190,8 @@ describe('ad-keywords server logic (model mocked)', () => {
       seeds: [{ query: 'birthday plant gift', scope: 'page' }],
     }, model)
     expect(prompt).toContain('1. birthday plant gift  [searched for this page]')
+    await generateKeywords({ adGroup: { mode: 'collection', name: 'Gifts', category: 'Gift Boxes', landingUrl: 'x', context: { title: 'Gifts', products: [{ title: 'Birthday Box' }] } }, seeds: [{ query: 'plant gifts for grandparents', scope: 'derived' }] }, model)
+    expect(prompt).toContain('1. plant gifts for grandparents  [theme derived from a longer real query]')
     expect(prompt).toContain('Birthday Box')
     expect(prompt).not.toContain('Sympathy Box')
     expect(prompt).not.toMatch(/impressions|clicks/i)
