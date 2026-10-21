@@ -31,6 +31,7 @@ export async function callFunction(name, payload, fetchImpl = fetch) {
 
 export const api = {
   fetchPage: url => callFunction('fetch-page', { url }).then(d => d.page),
+  validateKeywords: payload => callFunction('ad-keywords', { action: 'validate', ...payload }),
   generateKeywords: payload => callFunction('ad-keywords', { action: 'keywords', ...payload }),
   generateHeadlines: payload => callFunction('ad-keywords', { action: 'headlines', ...payload }),
 }

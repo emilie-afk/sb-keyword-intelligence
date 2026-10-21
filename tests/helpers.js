@@ -1,3 +1,4 @@
+import { validateKeywords } from '../src/shared/relevance.js'
 // Test helpers — mocked external responses only (no live AI or network calls)
 
 export function jsonResponse(body, status = 200, headers = {}) {
@@ -15,10 +16,16 @@ export function redirectResponse(location, status = 301) {
 }
 
 // Mock api for workspace orchestration tests; records every call
-export function mockApi({ keywordsFor, headlinesFor } = {}) {
-  const calls = { keywords: [], headlines: [] }
+export function mockApi({ keywordsFor, headlinesFor, validateFor } = {}) {
+  const calls = { keywords: [], headlines: [], validate: [] }
   return {
     calls,
+    // Same shared rules as the server's 'validate' action
+    validateKeywords: async (payload) => {
+      calls.validate.push(payload)
+      if (validateFor) { const r = validateFor(payload); if (r instanceof Error) throw r; return r }
+      return validateKeywords(payload.keywords, payload.adGroup)
+    },
     generateKeywords: async (payload) => {
       calls.keywords.push(payload)
       if (!payload.seeds?.length) throw new Error('At least one GSC seed query is required')

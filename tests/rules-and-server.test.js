@@ -152,10 +152,11 @@ describe('ad-keywords server logic (model mocked)', () => {
     expect(called).toBe(false)
   })
 
-  it('expansions must cite valid seeds; plant names, duplicates and informational queries are filtered', async () => {
+  it('expansions must cite valid seeds; plant names, duplicates, off-target and informational queries are filtered', async () => {
     const model = async () => ({ expansions: [
       { keyword: 'buy succulents online', seeds: [1] },
-      { keyword: 'succulent gift boxes delivered', seeds: ['succulent gift box'] },
+      { keyword: 'succulent gift boxes delivered', seeds: ['succulent gift box'] }, // cites an off-target seed (dropped server-side)
+      { keyword: 'succulent gift set online', seeds: [1] }, // gift intent → belongs to Gift Boxes
       { keyword: 'calico kitten for sale', seeds: [1] },
       { keyword: 'succulents for sale', seeds: [1] },
       { keyword: 'how to water succulents', seeds: [1] },
@@ -165,9 +166,8 @@ describe('ad-keywords server logic (model mocked)', () => {
     const res = await generateKeywords({ adGroup: categoryGroup, seeds }, model)
     expect(res.keywords).toEqual([
       { keyword: 'buy succulents online', category: 'Succulents', seedRefs: ['succulents for sale'] },
-      { keyword: 'succulent gift boxes delivered', category: 'Succulents', seedRefs: ['succulent gift box'] },
     ])
-    expect(res.rejected.map(r => r.reason)).toEqual(expect.arrayContaining(['duplicate', 'informational query', 'no valid seed reference']))
+    expect(res.rejected.map(r => r.reason)).toEqual(expect.arrayContaining(['duplicate', 'advice', 'no valid seed reference', 'other_category']))
   })
 
   it('category mode allows a plant name only when the cited real query contains it', async () => {

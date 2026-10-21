@@ -18,7 +18,9 @@ import { categorizeQuery } from './categorize.js'
 import { mapLimit } from './api.js'
 import {
   findSiteWideSeeds, pageSeeds, mergeSeedLists, makeSeed, evidenceFrom, primaryEvidence, targetContextText, makeDerivedSeed,
+  withRelevance,
 } from './seedMatching.js'
+import { relevanceTarget, assessKeyword, summarizeExclusions } from '../shared/relevance.js'
 
 let counter = 0
 export const uid = (prefix = 'id') =>
@@ -209,7 +211,11 @@ export function evidenceProblem(group, dataset) {
   if (datasetKey(st.dataset) !== datasetKey(datasetRef(dataset))) return 'The GSC dataset or reporting period changed — re-run matching to refresh the evidence.'
   if (st.target && st.target !== targetSignature(group)) return 'The target (URL, products or aliases) changed — re-run matching to refresh the evidence.'
   if (selectedSeeds(group).length === 0) return 'No selected GSC seed queries — find or select relevant queries first.'
-  if (usableSeeds(group).length === 0) return 'The selected queries are too long to use as keywords — extract a short theme from them first.'
+  if (usableSeeds(group).length === 0) {
+    return selectedSeeds(group).some(x => exceedsAdsKeywordLimits(x.base))
+      ? 'The selected queries are too long to use as keywords — extract a short theme from them first.'
+      : 'None of the selected queries is clearly relevant to this target — select relevant queries or adjust the target.'
+  }
   return null
 }
 
@@ -258,7 +264,8 @@ export async function findSeeds({ groupId, getProject, setProject, dataset, leve
     }
   }
 
-  const siteList = findSiteWideSeeds(dataset.queries, target, dataset, { level: useLevel })
+  const relTarget = groupRelevanceTarget(group)
+  const siteList = findSiteWideSeeds(dataset.queries, target, dataset, { level: useLevel, relTarget })
   const current = getProject().adGroups.find(g => g.id === groupId)
   // Late response? Discard it.
   if (!current || current.seedStatus?.requestId !== requestId || targetSignature(current) !== signature) {
@@ -285,9 +292,14 @@ export async function findSeeds({ groupId, getProject, setProject, dataset, leve
   const previous = new Map((current.seeds || []).map(s => [s.base, s]))
   const merged = [...mergeSeedLists(pageList, siteList, manual).filter(s => !derived.some(d => d.base === s.base)), ...derived].map(s => {
     const prev = previous.get(s.base)
-    if (s.origin === 'derived') return s
-    return prev ? { ...s, id: prev.id, selected: prev.selected, origin: prev.origin === 'manual' ? 'manual' : s.origin } : s
+    if (s.origin === 'derived') return withRelevance(s, relTarget)
+    const seed = prev ? { ...s, id: prev.id, origin: prev.origin === 'manual' ? 'manual' : s.origin } : s
+    return withRelevance(seed, relTarget, { previous: prev && prev.relevance ? prev : null })
   })
+  // Relevant first; uncertain/excluded stay listed (collapsed in the UI) for transparency
+  const rank = s => (s.relevance?.verdict === 'relevant' ? 0 : s.relevance?.verdict === 'uncertain' ? 1 : 2)
+  merged.sort((a, b) => rank(a) - rank(b))
+  const excluded = summarizeExclusions(merged.filter(s => s.relevance?.verdict !== 'relevant').map(s => ({ text: s.query, reason: s.relevance?.reason })))
 
   const failed = pageLevel?.status === 'error'
   setProject(p => updateGroup(p, groupId, g => ({
@@ -296,7 +308,7 @@ export async function findSeeds({ groupId, getProject, setProject, dataset, leve
     seedStatus: {
       state: failed ? 'error' : 'done',
       error: failed ? `${pageLevel.message} Site-wide matches are shown, but the evidence is incomplete — fix the problem and retry.` : null,
-      level: useLevel, pageLevel, siteWideCount: siteList.length, droppedManual,
+      level: useLevel, pageLevel, siteWideCount: siteList.length, droppedManual, excluded,
       dataset: datasetRef(dataset), datasetIncomplete: !!dataset.incomplete, target: signature, requestId,
     },
   })))
@@ -323,13 +335,17 @@ export function addManualSeed(project, groupId, row, dataset) {
       mode: g.mode,
       contextText: targetContextText(targetOf(g)),
     })
-    return { ...g, seeds: [{ ...seed, selected: true }, ...g.seeds] }
+    return { ...g, seeds: [withRelevance({ ...seed, selected: true }, groupRelevanceTarget(g)), ...g.seeds] }
   })
 }
 
 export const selectedSeeds = g => (g.seeds || []).filter(s => s.selected)
 // Seeds that can actually be used: queries over the Google Ads keyword limit can't (extract a theme instead)
-export const usableSeeds = g => selectedSeeds(g).filter(s => !exceedsAdsKeywordLimits(s.base))
+export const usableSeeds = g => selectedSeeds(g).filter(s => !exceedsAdsKeywordLimits(s.base) && seedIsRelevant(g, s))
+// A seed is usable only if it is clearly relevant to the group's target (re-checked, not trusted from storage)
+export function seedIsRelevant(group, seed) {
+  return assessKeyword(seed.query, groupRelevanceTarget(group)).verdict === 'relevant'
+}
 
 // Add a short theme extracted from a long query. The theme is labelled derived and carries no metrics;
 // the original long query keeps its own evidence and is left unselected.
@@ -339,7 +355,7 @@ export function addDerivedSeed(project, groupId, sourceSeedId, themeText) {
     const base = normalizeKeyword(themeText)
     if (!source || !base || exceedsAdsKeywordLimits(base)) return g
     if (g.seeds.some(s => s.base === base)) return { ...g, seeds: g.seeds.map(s => (s.base === base ? { ...s, selected: true } : s)) }
-    const seed = makeDerivedSeed(source, base, g.mode, targetContextText(targetOf(g)))
+    const seed = withRelevance(makeDerivedSeed(source, base, g.mode, targetContextText(targetOf(g))), groupRelevanceTarget(g))
     return { ...g, seeds: [seed, ...g.seeds.map(s => (s.id === sourceSeedId ? { ...s, selected: false } : s))] }
   })
 }
@@ -425,7 +441,7 @@ export function groupPayload(group) {
     category: group.category,
     landingUrl: group.landingUrl,
     context: group.mode === 'category' ? {} : {
-      title: page.title, description: page.description, details: page.details, productType: page.productType,
+      title: page.title, handle: page.handle, description: page.description, details: page.details, productType: page.productType,
       tags: page.tags, priceMin: page.priceMin, priceMax: page.priceMax, variants: page.variants, aliases: group.aliases,
       products: group.mode === 'collection'
         ? (page.products || []).filter(p => group.selectedProductHandles.includes(p.handle))
@@ -433,6 +449,8 @@ export function groupPayload(group) {
     },
   }
 }
+
+export const groupRelevanceTarget = group => relevanceTarget(groupPayload(group))
 
 // Seeds sent to the AI: the real queries plus their scope (metrics stay on the client)
 export const seedPayload = seeds => seeds.slice(0, 40).map(s => ({ query: s.query, scope: s.origin === 'derived' ? 'derived' : primaryEvidence(s)?.scope || 'site-wide' }))
@@ -458,45 +476,78 @@ export async function runKeywordGeneration({ groupIds, getProject, setProject, a
     const seeds = usableSeeds(start)
     const tooLong = selectedSeeds(start).length - seeds.length
     const selection = JSON.stringify(seeds.map(s => s.id).sort())
+    const isStale = () => {
+      const now = getProject().adGroups.find(g => g.id === groupId)
+      return !now || now.seedStatus?.requestId !== evidenceVersion || targetSignature(now) !== signature ||
+        JSON.stringify(usableSeeds(now).map(s => s.id).sort()) !== selection
+    }
     mark(groupId, { keywords: 'loading', error: null })
 
-    // 1. Selected seeds become observed keywords, with their own evidence
+    // 1. Selected seeds become observed keywords, with their own evidence — but only after the server
+    //    confirms each one is relevant to this target and has advertising intent (shared rules).
     // Queries over the length limit are excluded from both keywords and AI seed payloads.
     // Derived themes become "Derived from GSC query" keywords with no metrics.
+    const payload = groupPayload(start)
+    let validation
+    try {
+      validation = await api.validateKeywords({ adGroup: payload, keywords: seeds.map(x => x.base) })
+    } catch (err) {
+      mark(groupId, { keywords: 'error', error: `Could not validate keywords: ${err.message}. Nothing was added.` })
+      throw err
+    }
+    // The target, its evidence or the seed selection may have changed while validation was pending —
+    // never insert observed keywords validated against an older state
+    if (isStale()) {
+      if (getProject().adGroups.some(g => g.id === groupId)) mark(groupId, { keywords: 'error', error: 'The target or its evidence changed while validating — nothing was added. Generate again.' })
+      return { groupId, added: 0, discarded: true }
+    }
+    const accepted = new Set(validation.accepted || [])
+    const excludedItems = (validation.rejected || []).map(r => ({ text: r.keyword, reason: r.reason }))
     let observedAdded = 0
     const observedSkipped = tooLong
     setProject(p => updateGroup(p, groupId, g => {
-      const r1 = mergeKeywords(g, seeds.filter(x => x.origin !== 'derived').map(x => ({ base: x.base, evidence: x.evidence })), 'gsc_observed')
-      const r = mergeKeywords(r1.group, seeds.filter(x => x.origin === 'derived').map(x => ({ base: x.base, derivedFrom: x.derivedFrom })), 'gsc_derived')
+      const ok = x => accepted.has(x.base)
+      const r1 = mergeKeywords(g, seeds.filter(x => x.origin !== 'derived' && ok(x)).map(x => ({ base: x.base, evidence: x.evidence })), 'gsc_observed')
+      const r = mergeKeywords(r1.group, seeds.filter(x => x.origin === 'derived' && ok(x)).map(x => ({ base: x.base, derivedFrom: x.derivedFrom })), 'gsc_derived')
       observedAdded = r.added + r1.added
       return r.group
     }))
 
     // 2. AI expansions grounded in the selected seeds that are sent
-    const sent = seedPayload(seeds)
+    const sent = seedPayload(seeds.filter(x => accepted.has(x.base)))
+    if (sent.length === 0) {
+      const excluded = summarizeExclusions(excludedItems)
+      mark(groupId, { keywords: 'done', error: null, lastRun: { observedAdded, observedSkipped, aiAdded: 0, rejected: 0, excluded } })
+      return { groupId, added: observedAdded }
+    }
     const sentBases = new Set(sent.map(x => normalizeKeyword(x.query)))
     const group = getProject().adGroups.find(g => g.id === groupId)
     try {
       const res = await api.generateKeywords({ adGroup: groupPayload(group), seeds: sent, avoid: group.keywords.map(k => k.base), count })
 
-      const now = getProject().adGroups.find(g => g.id === groupId)
-      if (!now || now.seedStatus?.requestId !== evidenceVersion || targetSignature(now) !== signature || JSON.stringify(usableSeeds(now).map(s => s.id).sort()) !== selection) {
-        if (now) mark(groupId, { keywords: 'error', error: 'The target or its evidence changed while generating — AI results were discarded. Generate again.' })
+      if (isStale()) {
+        if (getProject().adGroups.some(g => g.id === groupId)) mark(groupId, { keywords: 'error', error: 'The target or its evidence changed while generating — AI results were discarded. Generate again.' })
         return { groupId, added: observedAdded, discarded: true }
       }
 
       let rejected = (res.rejected || []).length
+      for (const r of res.rejected || []) if (r.reason && r.reason !== 'duplicate') excludedItems.push({ text: r.keyword, reason: r.reason })
+      const relTarget = relevanceTarget(payload)
       const items = []
       for (const k of res.keywords || []) {
         const refs = [...new Set((k.seedRefs || []).map(normalizeKeyword))].filter(r => sentBases.has(r))
         if (refs.length === 0) { rejected++; continue } // invented or unselected reference
+        // A valid seed reference alone doesn't make an expansion relevant — re-check it here too
+        const check = assessKeyword(k.keyword, relTarget)
+        if (check.verdict !== 'relevant') { rejected++; excludedItems.push({ text: normalizeKeyword(k.keyword), reason: check.reason }); continue }
         items.push({ base: k.keyword, seedRefs: refs })
       }
       let aiAdded = 0
+      const excluded = summarizeExclusions(excludedItems)
       setProject(p => updateGroup(p, groupId, g => {
         const r = mergeKeywords(g, items, 'ai_expansion')
         aiAdded = r.added
-        return { ...r.group, status: { keywords: 'done', error: null, lastRun: { observedAdded, observedSkipped, aiAdded, rejected } } }
+        return { ...r.group, status: { keywords: 'done', error: null, lastRun: { observedAdded, observedSkipped, aiAdded, rejected, excluded } } }
       }))
       return { groupId, added: observedAdded + aiAdded }
     } catch (err) {
@@ -504,6 +555,31 @@ export async function runKeywordGeneration({ groupIds, getProject, setProject, a
       throw err
     }
   })
+}
+
+// Remove keywords that aren't relevant to their ad group's target (all match types go with the keyword)
+// and deselect seeds that aren't relevant. Keywords typed in by hand are kept and counted.
+// Returns { project, groups: [{ groupId, name, removed, keptManual, excluded }], totalRemoved }
+export function cleanProject(project) {
+  const groups = []
+  let totalRemoved = 0
+  const adGroups = project.adGroups.map(g => {
+    const relTarget = groupRelevanceTarget(g)
+    const removedItems = []
+    let keptManual = 0
+    const keywords = g.keywords.filter(k => {
+      const r = assessKeyword(k.base, relTarget)
+      if (r.verdict === 'relevant') return true
+      if (k.source === 'manual') { keptManual++; return true }
+      removedItems.push({ text: k.base, reason: r.reason })
+      return false
+    })
+    const seeds = (g.seeds || []).map(x => withRelevance(x, relTarget, { previous: x }))
+    totalRemoved += removedItems.length
+    groups.push({ groupId: g.id, name: g.name, removed: removedItems.length, keptManual, excluded: summarizeExclusions(removedItems) })
+    return removedItems.length || seeds.some((x, i) => x.selected !== g.seeds[i].selected) ? { ...g, keywords, seeds } : g
+  })
+  return { project: { ...project, adGroups }, groups, totalRemoved }
 }
 
 export const HEADLINE_BATCH_SIZE = 10
@@ -669,7 +745,7 @@ export function serializeProject(project) {
       pageLevel: g.seedStatus?.pageLevel || null,
       seeds: (g.seeds || []).map(s => ({
         id: s.id, query: s.query, base: s.base, evidence: s.evidence, reasons: s.reasons, flags: s.flags,
-        score: s.score, origin: s.origin, selected: s.selected, derivedFrom: s.derivedFrom || null,
+        score: s.score, origin: s.origin, selected: s.selected, derivedFrom: s.derivedFrom || null, relevance: s.relevance || null,
       })),
       keywords: g.keywords.map(k => ({
         id: k.id, base: k.base, source: k.source, match: k.match, headlines: k.headlines,
@@ -695,7 +771,8 @@ export function deserializeProject(row) {
       ...g,
       selectedProductHandles: g.selectedProductHandles || [],
       aliases: g.aliases || [],
-      seeds: g.seeds || [],
+      // Seeds saved before relevance checks existed get a verdict now (and lose selection if off-target)
+      seeds: (g.seeds || []).map(x => (x.relevance ? x : withRelevance({ ...x, flags: x.flags || [] }, groupRelevanceTarget({ ...g, selectedProductHandles: g.selectedProductHandles || [], aliases: g.aliases || [] }), { previous: x }))),
       seedStatus: {
         ...emptySeedStatus(),
         state: g.seedState || (g.seeds?.length ? 'done' : 'none'),

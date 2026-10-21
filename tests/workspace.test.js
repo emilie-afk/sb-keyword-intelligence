@@ -208,20 +208,25 @@ describe('collection and product modes', () => {
     expect(group(g.id).status.error).toMatch(/No selected GSC seed queries/)
   })
 
-  it('manual seeds from the dataset can be added; selection is preserved when re-matching', async () => {
-    const ds = apiDataset(SITE_ROWS)
+  it('manual seeds from the dataset can be added; selection is preserved when re-matching; off-target manual seeds stay unusable', async () => {
+    const ds = apiDataset([...SITE_ROWS, row('buy calico kitten', 0, 12)])
     const g = createPageGroup(productPage)
     store.setProject(p => ({ ...p, adGroups: [g] }))
     await findSeeds({ groupId: g.id, ...ctx(), dataset: ds })
+    store.setProject(p => addManualSeed(p, g.id, ds.queries.find(q => q.query === 'buy calico kitten'), ds))
     store.setProject(p => addManualSeed(p, g.id, ds.queries.find(q => q.query === 'buy succulents online'), ds))
     const target = group(g.id).seeds.find(s => s.query === 'calico kitten crassula')
     store.setProject(p => setSeedSelection(p, g.id, [target.id], false))
     await findSeeds({ groupId: g.id, ...ctx(), dataset: ds, level: 'broad' })
     const seeds = group(g.id).seeds
-    expect(seeds.find(s => s.query === 'buy succulents online')).toMatchObject({ origin: 'manual', selected: true })
+    // (now also found automatically by the relevance rules, so it may be 'matched' rather than 'manual')
+    expect(seeds.find(s => s.query === 'buy calico kitten')).toMatchObject({ selected: true })
+    // generic category query added by hand: kept as evidence, but not usable for this product
+    expect(seeds.find(s => s.query === 'buy succulents online')).toMatchObject({ origin: 'manual', selected: false })
     expect(seeds.find(s => s.query === 'calico kitten crassula').selected).toBe(false)
-    expect(selectedSeeds(group(g.id)).map(s => s.query)).toContain('buy succulents online')
+    expect(selectedSeeds(group(g.id)).map(s => s.query)).toContain('buy calico kitten')
   })
+
 })
 
 describe('page-level GSC request', () => {

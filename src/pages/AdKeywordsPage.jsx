@@ -6,13 +6,14 @@ import {
   ensureCategoryGroups, categoryGroupIds, createPageGroup, pageSnapshot, guessCategory, updateGroup,
   removeGroup, runKeywordGeneration, buildHeadlineBatches, runHeadlineBatches, projectRows, filterRows,
   removeKeywords, setMatchType, editKeyword, mergeKeywords, findSeeds, setSeedSelection, addManualSeed,
-  selectedSeeds, datasetRef, scopeLabel, evidenceProblem, addDerivedSeed,
+  selectedSeeds, datasetRef, scopeLabel, evidenceProblem, addDerivedSeed, cleanProject,
 } from '../lib/workspace'
 import { api } from '../lib/api'
 import { saveProject } from '../lib/supabase'
 import { downloadKeywordRows } from '../lib/download'
 import PagePreview from '../components/PagePreview'
 import SeedPanel, { datasetLabel } from '../components/SeedPanel'
+import { exclusionSummaryText } from '../shared/relevance'
 
 const MODES = [
   { id: 'category', label: 'By category' },
@@ -54,6 +55,7 @@ export default function AdKeywordsPage({
   const [manualInputs, setManualInputs] = useState({})
 
   const [hl, setHl] = useState({ running: false, done: 0, total: 0, failed: [] })
+  const [cleanResult, setCleanResult] = useState(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState(null)
 
@@ -349,7 +351,7 @@ export default function AdKeywordsPage({
                   {g.status?.keywords === 'loading' && <div className="status-text">Generating keywords…</div>}
                   {g.status?.keywords === 'error' && <div className="hint-bad">{g.status.error}</div>}
                   {g.status?.keywords === 'done' && run && (
-                    <div className="status-text">Last run: +{run.observedAdded} observed queries, +{run.aiAdded} AI expansions{run.rejected ? ` (${run.rejected} filtered out)` : ''}{run.observedSkipped ? ` · ${run.observedSkipped} selected quer${run.observedSkipped === 1 ? 'y' : 'ies'} too long to be a Google Ads keyword` : ''}</div>
+                    <div className="status-text">{run.excluded && Object.keys(run.excluded).length > 0 && <div className="hint-gap" style={{ marginBottom: 4 }}>Not added: {exclusionSummaryText(run.excluded)}</div>}Last run: +{run.observedAdded} observed queries, +{run.aiAdded} AI expansions{run.rejected ? ` (${run.rejected} filtered out)` : ''}{run.observedSkipped ? ` · ${run.observedSkipped} selected quer${run.observedSkipped === 1 ? 'y' : 'ies'} too long to be a Google Ads keyword` : ''}</div>
                   )}
                   <div className="manual-row">
                     <input className="input" placeholder="Add a keyword manually" value={manualInputs[g.id] || ''}
@@ -433,6 +435,22 @@ export default function AdKeywordsPage({
               </select>
             </div>
           </div>
+
+          <div className="clean-row">
+            <button className="btn-secondary btn-sm" disabled={busy} onClick={() => { const r = cleanProject(store.getProject()); setP(r.project); setSelectedRows(new Set()); setCleanResult(r) }}>
+              ✓ Clean existing results
+            </button>
+            <span className="cta-hint" style={{ margin: 0 }}>Removes keywords (all match types) that aren’t relevant to their ad group’s target. Keywords you typed in are kept.</span>
+          </div>
+          {cleanResult && (
+            <div className={cleanResult.totalRemoved ? 'exclusion-summary' : 'status-success'} style={{ marginBottom: 10 }}>
+              {cleanResult.totalRemoved
+                ? <>Removed {cleanResult.totalRemoved} keyword{cleanResult.totalRemoved === 1 ? '' : 's'} (with all match types): {cleanResult.groups.filter(x => x.removed).map(x => `${x.name}: ${x.removed} — ${exclusionSummaryText(x.excluded)}`).join(' · ')}</>
+                : 'All keywords are relevant to their targets — nothing removed.'}
+              {cleanResult.groups.some(x => x.keptManual) && ` · Kept ${cleanResult.groups.reduce((n, x) => n + x.keptManual, 0)} manually added keyword(s) for you to review.`}
+              <button className="link-btn" style={{ marginLeft: 8 }} onClick={() => setCleanResult(null)}>Dismiss</button>
+            </div>
+          )}
 
           <div className="bulk-bar">
             <span>{liveSelected.size} rows selected ({selectedKeywordIds.length} keywords)</span>

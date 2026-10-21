@@ -1,6 +1,6 @@
 # Ad Keywords workspace — review notes
 
-Release build (verified locally — not yet pushed, deployed, or migrated).
+Release build. Migrations applied to production on 2026-10-21; relevance update is local (not pushed).
 
 ## Before deploying
 1. **Apply the migrations in order** (Supabase → SQL Editor), both not yet applied to production:
@@ -53,9 +53,35 @@ Release build (verified locally — not yet pushed, deployed, or migrated).
 - Evidence is versioned: changing the URL, selected products, aliases, dataset or period makes it outdated
   (generation blocked until re-matched); late seed, AI and headline responses are discarded.
 
+## Target relevance and ad intent (src/shared/relevance.js)
+One shared gate, used for seed selection, observed queries, derived themes and AI expansions — in the browser
+AND on the server (`ad-keywords` actions `validate` and `keywords`). Generic overlap ("plant", "box", "well")
+never makes a query relevant.
+- Ad intent first: care/advice/growing-conditions questions, soil/growing media/supplies (unless the target is a
+  supplies collection), products we don't sell and over-long queries are excluded; review/coupon research is held back.
+- Gift Boxes: needs a gift word or recipient (or an occasion + plant/gift container), backed by plant gifts;
+  non-plant gifts (wine, chocolate, …) and plain plant shopping are excluded.
+- Succulents / Houseplants / Air Plants / Succulent Subscription: need their own anchors; queries anchored in
+  another category (or gift/subscription intent) are kept out.
+- Product: must share a distinctive word with the product (family words like "succulent" don't count).
+  Collection: its own names/selected products. A collection whose title has qualifiers beyond its category
+  ("Pet Safe Houseplants") must match them; only category-level collections ("Plant Gift Boxes") fall back to
+  the category theme. Gift-themed targets also need gift/plant context.
+- Buying questions ("where to buy succulent gift boxes") are buying intent; care/growing questions stay excluded.
+  Plant-safety words ("pet safe") are a product attribute when buying or when the target has it.
+- Any gifting intent (gift word, recipient, or occasion + plant) belongs to Gift Boxes only — "buy succulent gifts"
+  is held out of Succulents.
+- Generation re-checks target, evidence and seed selection after validation AND after the AI response;
+  a stale response adds nothing.
+- Only relevant seeds are selected; the rest are summarised ("Left out automatically") and optional to view.
+- "Clean existing results" removes off-target keywords (all match types) and deselects off-target seeds;
+  manually typed keywords are kept and counted.
+- Root cause of the reported contamination: the Gift Boxes term "get well" was reduced to the single word
+  "well" by the old matcher, so every "…do/grow well…" query matched.
+
 ## Known limitations
 - Page-level evidence needs a live Search Console connection (Google tokens expire after ~1 hour — reconnect if asked).
-- Relevance matching is rule-based (terms, phrases, aliases); review the evidence table before generating.
+- Relevance is rule-based (vocabularies in src/shared/relevance.js); unusual product names may need an alias to be recognised.
 - Category mode has no page-level data (categories have no single URL); its evidence is always site-wide.
 - Default category landing pages are set in `CATEGORY_LANDING_PAGES` — confirm they're the pages you want (editable per ad group).
 - Headlines can be regenerated but not hand-edited in the table yet.

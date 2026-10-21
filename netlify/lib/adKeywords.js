@@ -13,6 +13,7 @@ import {
   BRAND_CONTEXT, CATEGORIES, CATEGORY_DESCRIPTIONS, HEADLINE_MAX,
   checkKeywordEligibility, normalizeKeyword, validateHeadlines,
 } from '../../src/shared/keywordRules.js'
+import { assessKeyword, relevanceTarget, validateKeywords } from '../../src/shared/relevance.js'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const MODEL = 'claude-haiku-4-5-20251001'
@@ -110,6 +111,14 @@ export function contextText(adGroup) {
   return ''
 }
 
+const CATEGORY_FOCUS = {
+  'Gift Boxes': '- Every keyword must express gifting intent (gift, present, occasion or recipient) for PLANT gifts / plant gift boxes. No general plant shopping, soil, supplies, care or lighting terms.',
+  Succulents: '- Every keyword must be about live succulents or cacti. No houseplants, air plants, gift boxes, subscriptions, soil or care terms.',
+  Houseplants: '- Every keyword must be about live houseplants / indoor plants. No succulents, air plants, gift boxes, soil, lighting or care terms.',
+  'Air Plants': '- Every keyword must be about air plants (tillandsia). No succulents, houseplants, soil or care terms.',
+  'Succulent Subscription': '- Every keyword must be about a plant/succulent subscription or monthly plant box.',
+}
+
 const MODE_RULES = {
   category: `- Category-level terms only. Do NOT use individual plant species/variety names unless the cited real query contains that plant.
 - Stay inside this category; do not drift into other categories or products.`,
@@ -133,6 +142,7 @@ REAL SEARCH QUERIES from Google Search Console for this target (numbered). These
 ${seeds.map((s, i) => `${i + 1}. ${s.query}${s.scope === 'page' ? '  [searched for this page]' : s.scope === 'derived' ? '  [theme derived from a longer real query]' : ''}`).join('\n')}
 
 ${avoid.length ? `Keywords already in this ad group (do not repeat or trivially reword them):\n${avoid.slice(0, 80).map(s => `- ${s}`).join('\n')}\n` : ''}
+${CATEGORY_FOCUS[adGroup.category] || ''}
 Write up to ${count} keyword EXPANSIONS derived from the real queries above:
 - refine wording, add buying-intent variations (buy, for sale, online, delivered, gift), or add closely related terms
 - every expansion must cite the number(s) of the real query or queries it is derived from
@@ -190,6 +200,13 @@ export async function generateKeywords({ adGroup, seeds = [], avoid = [], count 
   if (seedList.length === 0) {
     throw new RequestError('At least one GSC seed query is required — keywords are generated from real Search Console queries.')
   }
+  // Seeds must themselves be relevant to the target; irrelevant ones are dropped server-side
+  const relTarget = relevanceTarget(adGroup)
+  const relevantSeeds = seedList.filter(x => assessKeyword(x.query, relTarget).verdict === 'relevant')
+  if (relevantSeeds.length === 0) {
+    throw new RequestError('None of the GSC seed queries is clearly relevant to this target.')
+  }
+  seedList.splice(0, seedList.length, ...relevantSeeds)
   const n = Math.max(3, Math.min(25, Number(count) || 12))
   const avoidBases = avoid.map(normalizeKeyword).filter(Boolean)
   const result = await callModel(keywordPrompt(adGroup, seedList, avoidBases, n), 1500)
@@ -208,6 +225,9 @@ export async function generateKeywords({ adGroup, seeds = [], avoid = [], count 
       .filter(b => b && seedList.some(s => s.base === b)))]
     if (refs.length === 0) { rejected.push({ keyword: base, reason: 'no valid seed reference' }); continue }
     if (seen.has(base)) { rejected.push({ keyword: base, reason: 'duplicate' }); continue }
+    // Relevance to THIS target and advertising intent — a valid seed reference alone is not enough
+    const fit = assessKeyword(base, relTarget)
+    if (fit.verdict !== 'relevant') { rejected.push({ keyword: base, reason: fit.reason, detail: fit.detail }); continue }
     let check = checkKeywordEligibility(base, adGroup.mode, ctxText)
     // Category mode: a plant name is fine when the cited real query contains it
     if (!check.ok && adGroup.mode === 'category' && check.reason?.startsWith('individual plant')) {
@@ -242,8 +262,16 @@ export async function generateHeadlines({ adGroup, keywords = [] }, callModel) {
   return { results }
 }
 
+// Validate candidate keywords (observed queries, derived themes) for a target — no model call
+export function validateTargetKeywords({ adGroup, keywords = [] }) {
+  if (!adGroup || !['category', 'collection', 'product'].includes(adGroup.mode)) throw new RequestError('adGroup.mode must be category, collection or product')
+  if (!Array.isArray(keywords) || keywords.length > 200) throw new RequestError('Send 1–200 keywords to validate')
+  return validateKeywords(keywords, adGroup)
+}
+
 export async function handleRequest(body, callModel) {
+  if (body?.action === 'validate') return validateTargetKeywords(body)
   if (body?.action === 'keywords') return generateKeywords(body, callModel)
   if (body?.action === 'headlines') return generateHeadlines(body, callModel)
-  throw new RequestError("Unknown action — expected 'keywords' or 'headlines'")
+  throw new RequestError("Unknown action — expected 'validate', 'keywords' or 'headlines'")
 }
