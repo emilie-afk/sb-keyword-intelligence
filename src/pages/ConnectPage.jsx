@@ -1,6 +1,6 @@
 import { useState, useRef } from 'react'
 import Papa from 'papaparse'
-import { fetchGSCData, daysAgo, today } from '../lib/gscApi'
+import { fetchGSCDataset, daysAgo, today } from '../lib/gscApi'
 import { processQueries } from '../lib/categorize'
 
 // Date range presets
@@ -9,13 +9,14 @@ const DATE_PRESETS = [
   { label: 'Last 3 months', days: 90 },
   { label: 'Last 6 months', days: 180 },
   { label: 'Last 12 months', days: 365 },
+  { label: 'Last 16 months (max)', days: 486 },
 ]
 
-export default function ConnectPage({ onConnect, onData, gscToken }) {
+export default function ConnectPage({ onConnect, onData, gscToken, onSkip, hasData }) {
   const [dateRange, setDateRange] = useState(180)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
-  const [authStep, setAuthStep] = useState('idle') // idle | authorizing | authorized
+  const [authStep, setAuthStep] = useState(gscToken ? 'authorized' : 'idle') // idle | authorizing | authorized — remembers an existing connection
   const fileInputRef = useRef()
 
   // Trigger Google OAuth popup to get a Search Console access token
@@ -52,14 +53,15 @@ export default function ConnectPage({ onConnect, onData, gscToken }) {
     try {
       const endDate = today()
       const startDate = daysAgo(dateRange)
-      const raw = await fetchGSCData(gscToken, startDate, endDate)
+      const { rows: raw, incomplete } = await fetchGSCDataset(gscToken, startDate, endDate)
       if (raw.length === 0) {
-        setError('No data returned. Make sure the Google account has access to the succulentsbox.com property in Search Console.')
+        // Empty GSC results don't block anything — Ad Keywords works without GSC data
+        setError('No data returned for this period. Make sure the Google account has access to the succulentsbox.com property in Search Console. Try a longer date range — even a small amount of relevant data is useful.')
         setLoading(false)
         return
       }
       const processed = processQueries(raw)
-      onData(processed, { source: 'gsc_api', dateStart: startDate, dateEnd: endDate })
+      onData(processed, { source: 'gsc_api', dateStart: startDate, dateEnd: endDate, incomplete })
     } catch (err) {
       setError(err.message)
     } finally {
@@ -168,6 +170,17 @@ export default function ConnectPage({ onConnect, onData, gscToken }) {
         </div>
 
         {error && <div className="error-box">{error}</div>}
+
+        <div className="divider">or</div>
+        <div className="connect-section">
+          <h2>{hasData ? 'Back to Ad Keywords' : 'Preview pages first'}</h2>
+          <p>{hasData
+            ? 'Your GSC dataset is loaded. Keywords are built from its real search queries.'
+            : 'You can preview collections and products before loading GSC data. Generating keywords requires a GSC dataset.'}</p>
+          <button className="btn-secondary" onClick={onSkip}>
+            {hasData ? '→ Back to Ad Keywords' : '→ Open Ad Keywords (preview)'}
+          </button>
+        </div>
       </div>
     </div>
   )

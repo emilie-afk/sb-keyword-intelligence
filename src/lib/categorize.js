@@ -1,12 +1,16 @@
 // Keyword categorization logic — mirrors the analysis done on the GSC CSV
-// Edit these lists to adjust how queries are bucketed
+// Edit these lists to adjust how queries are bucketed.
+// Shared rules (categories, informational signals, eligibility) live in src/shared/keywordRules.js
+import { CATEGORIES, isInformational, checkKeywordEligibility } from '../shared/keywordRules.js'
+
+export { isInformational }
 
 // Brand terms are checked FIRST before any other category
-const BRAND_TERMS = [
+export const BRAND_TERMS = [
   'succulents box', 'succulent box', 'succulentsbox', 'succulentbox', 'the succulent box',
 ]
 
-const CATEGORY_KEYWORDS = {
+export const CATEGORY_KEYWORDS = {
   Branded: BRAND_TERMS,
 
   'Succulent Subscription': [
@@ -57,23 +61,6 @@ const BUYING_INTENT_KEYWORDS = [
   'near me', 'discount', 'deal', 'best place', 'where can i', 'how much', 'gift',
 ]
 
-// Queries containing these signals are care/informational — not good ad targets
-const INFORMATIONAL_SIGNALS = [
-  'how to', 'how do', 'how do i', 'why is', 'why are', 'why does',
-  'what is', 'what are', 'what does',
-  'care for', 'care guide', 'care tips', 'care and', 'caring for',
-  'propagat', 'repot', 'repotting',
-  'dying', 'dying?', 'dead', 'yellow', 'brown', 'mushy', 'drooping', 'wilting',
-  'overwater', 'underwater', 'sunburn', 'etiolated', 'leggy',
-  'spots on', 'spots ',
-  'dormant', 'dormancy',
-  'toxic', 'safe for', 'pet safe', 'cat safe', 'dog safe',
-  'identify', 'identification', 'types of', 'varieties of',
-  'difference between', ' vs ', 'versus',
-  'when to', 'how often', 'soil for', 'water ', 'watering',
-  'fertilize', 'fertilizer', 'light for', 'sunlight',
-]
-
 // A category is considered a "gap" if it has few buying-intent queries
 // relative to its total search volume
 const GAP_THRESHOLDS = {
@@ -100,12 +87,6 @@ export function hasBuyingIntent(query) {
   })
 }
 
-// Returns true for care guides, how-tos, troubleshooting — not good ad targets
-export function isInformational(query) {
-  const q = query.toLowerCase()
-  return INFORMATIONAL_SIGNALS.some(signal => q.includes(signal))
-}
-
 // Process raw GSC rows into enriched, categorized query objects
 export function processQueries(rawRows) {
   return rawRows.map(row => ({
@@ -120,7 +101,7 @@ export function processQueries(rawRows) {
 // Build category-level summary stats from processed queries
 export function buildCategoryStats(processedQueries) {
   const stats = {}
-  const cats = ['Succulents', 'Houseplants', 'Succulent Subscription', 'Gift Boxes', 'Air Plants', 'Branded', 'Other']
+  const cats = [...CATEGORIES, 'Branded', 'Other']
 
   for (const cat of cats) {
     const rows = processedQueries.filter(q => q.category === cat)
@@ -136,7 +117,10 @@ export function buildCategoryStats(processedQueries) {
       buyingImpressions: buyingRows.reduce((s, q) => s + q.impressions, 0),
       infoQueries: infoRows.length,
       infoClicks: infoRows.reduce((s, q) => s + q.clicks, 0),
-      topBuyingQueries: [...buyingRows].sort((a, b) => b.clicks - a.clicks).slice(0, 10),
+      // Eligibility filters run before the limit so excluded queries don't use up slots
+      topBuyingQueries: buyingRows
+        .filter(q => !q.isInformational && checkKeywordEligibility(q.query, 'category').ok)
+        .sort((a, b) => b.clicks - a.clicks).slice(0, 10),
       topInfoQueries: [...infoRows].sort((a, b) => b.clicks - a.clicks).slice(0, 10),
       isGap: buyingRows.length < GAP_THRESHOLDS.buying_queries &&
              rows.reduce((s, q) => s + q.clicks, 0) < GAP_THRESHOLDS.total_clicks,
