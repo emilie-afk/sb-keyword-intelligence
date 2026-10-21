@@ -2,20 +2,16 @@ import { useEffect, useRef, useState } from 'react'
 import { Chart } from 'chart.js/auto'
 import { buildCategoryStats } from '../lib/categorize'
 import { downloadQueriesCSV } from '../lib/download'
+import { saveAnalysis } from '../lib/supabase'
+import { CATEGORY_COLORS as SHARED_COLORS } from '../shared/keywordRules'
 
-const CATEGORY_COLORS = {
-  Succulents: '#2a78d6',
-  Houseplants: '#e87ba4',
-  'Succulent Subscription': '#008300',
-  'Gift Boxes': '#eda100',
-  'Air Plants': '#1baf7a',
-  Branded: '#888780',
-  Other: '#b4b2a9',
-}
+const CATEGORY_COLORS = SHARED_COLORS
 
 const ORDERED_CATS = ['Succulents', 'Houseplants', 'Succulent Subscription', 'Gift Boxes', 'Air Plants', 'Branded']
 
-export default function AnalysisPage({ data }) {
+export default function AnalysisPage({ data, uploadMeta, savedUploadId, onSaved, onGoToKeywords }) {
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState(null)
   const [stats, setStats] = useState(null)
   const [filter, setFilter] = useState('all')
   const [catFilter, setCatFilter] = useState('All')
@@ -92,6 +88,24 @@ export default function AnalysisPage({ data }) {
     }
   }, [stats])
 
+  const handleSave = async () => {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const id = await saveAnalysis({
+        queries: data,
+        dateStart: uploadMeta?.dateStart,
+        dateEnd: uploadMeta?.dateEnd,
+        source: uploadMeta?.source || 'unknown',
+      })
+      onSaved(id)
+    } catch (err) {
+      setSaveError(`Save failed: ${err.message}. Nothing was saved — please try again.`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
   if (!stats) return <div className="loading">Processing queries…</div>
 
   // Filter displayed queries
@@ -109,6 +123,13 @@ export default function AnalysisPage({ data }) {
 
   return (
     <div className="page">
+
+      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
+        <button className="btn-primary btn-lg" onClick={onGoToKeywords}>→ Go to Ad Keywords</button>
+        <span className="cta-hint" style={{ margin: 0 }}>
+          {uploadMeta?.dateStart ? `GSC period ${uploadMeta.dateStart} → ${uploadMeta.dateEnd} · ` : ''}site-wide query data
+        </span>
+      </div>
 
       {/* Summary stats */}
       <div className="stats-row">
@@ -133,7 +154,7 @@ export default function AnalysisPage({ data }) {
       {/* Gap category alert */}
       {gapCats.length > 0 && (
         <div className="alert-gap">
-          <strong>Gap categories detected:</strong> {gapCats.join(', ')} — low buying-intent presence. Suggested keywords will be added for these in the Ad Keywords tab.
+          <strong>Gap categories detected:</strong> {gapCats.join(', ')} — low buying-intent presence in GSC. You can generate AI keyword suggestions for these in the Ad Keywords tab.
         </div>
       )}
 
@@ -253,6 +274,21 @@ export default function AnalysisPage({ data }) {
           </tbody>
         </table>
         {filteredQueries.length === 200 && <p className="table-hint">Showing top 200 rows. Export CSV for full data.</p>}
+      </div>
+
+      {/* Save the GSC analysis (keyword projects are saved separately from the Ad Keywords tab) */}
+      <div className="save-section">
+        {savedUploadId
+          ? <p className="status-success">✓ Analysis saved to Supabase — it can be linked to keyword projects and reopened from History</p>
+          : (
+            <>
+              <button className="btn-primary" onClick={handleSave} disabled={saving}>
+                {saving ? 'Saving…' : '↑ Save analysis to Supabase'}
+              </button>
+              <p className="cta-hint">Saves this GSC analysis (queries and metrics) so it shows in History and can be referenced by keyword projects.</p>
+            </>
+          )}
+        {saveError && <div className="error-box">{saveError}</div>}
       </div>
 
 

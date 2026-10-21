@@ -3,6 +3,10 @@
   publish = "dist"
   functions = "netlify/functions"
 
+# Bundle functions with esbuild so they can import the shared rules in src/shared/
+[functions]
+  node_bundler = "esbuild"
+
 # Redirect all routes to index.html so React handles navigation
 [[redirects]]
   from = "/*"
