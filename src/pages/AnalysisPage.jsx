@@ -110,14 +110,6 @@ export default function AnalysisPage({ data }) {
   return (
     <div className="page">
 
-      {/* Generate keywords CTA — top */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 20 }}>
-        <button className="btn-primary btn-lg" onClick={handleGenerateKeywords} disabled={generating}>
-          {generating ? 'Generating keywords + AI headlines…' : '→ Generate Ad Keywords'}
-        </button>
-        {error && <div className="error-box" style={{ margin: 0 }}>{error}</div>}
-      </div>
-
       {/* Summary stats */}
       <div className="stats-row">
         <div className="stat-card">
