@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { FLAG_LABELS, primaryEvidence, searchDataset, suggestTheme } from '../lib/seedMatching'
+import { FLAG_LABELS, primaryEvidence, searchDataset, suggestTheme, relevanceLabel } from '../lib/seedMatching'
+import { exclusionSummaryText } from '../shared/relevance'
 import { normalizeKeyword } from '../shared/keywordRules'
 import { scopeLabel, evidenceProblem, datasetKey, datasetRef, targetSignature } from '../lib/workspace'
 
@@ -20,13 +21,19 @@ export default function SeedPanel({
   onFindSeeds, onSetLevel, onExtendPeriod, onToggleSeeds, onAddManual, onAddDerived, onSetAliases, onGenerate, kwCount, setKwCount,
 }) {
   const [showAll, setShowAll] = useState(false)
+  const [showExcluded, setShowExcluded] = useState(false)
   const [search, setSearch] = useState('')
   const [aliasText, setAliasText] = useState((group.aliases || []).join(', '))
   const [themeDrafts, setThemeDrafts] = useState({}) // seedId → editable theme text
   const seeds = group.seeds || []
   const st = group.seedStatus || {}
   const selected = seeds.filter(s => s.selected)
-  const visible = showAll ? seeds : seeds.slice(0, SHOW)
+  // Only clearly relevant queries are shown by default; uncertain/excluded ones are summarised and optional
+  const included = seeds.filter(s => s.relevance?.verdict === 'relevant' || s.selected)
+  const others = seeds.filter(s => !included.includes(s))
+  const list = showExcluded ? [...included, ...others] : included
+  const visible = showAll ? list : list.slice(0, SHOW)
+  const excludedText = exclusionSummaryText(st.excluded || {})
   const suggestions = useMemo(() => (search ? searchDataset(dataset?.queries, search, 12) : []), [dataset, search])
   const seedBases = new Set(seeds.map(s => s.base))
   const pageCount = seeds.filter(s => s.evidence.some(e => e.scope === 'page')).length
@@ -90,7 +97,7 @@ export default function SeedPanel({
         )}
         {st.state === 'done' && (
           <div className="status-text">
-            {seeds.length} relevant queries ({pageCount} page-level, {seeds.length - pageCount} site-wide) · {selected.length} selected for generation
+            {included.length} relevant queries ({pageCount} page-level, {included.length - pageCount} site-wide) · {selected.length} selected for generation
           </div>
         )}
         {loading && <div className="status-text">Finding relevant GSC queries…</div>}
@@ -99,7 +106,13 @@ export default function SeedPanel({
       </div>
 
       {/* Sparse / empty evidence: offer ways to broaden, honestly */}
-      {st.state === 'done' && !stale && seeds.length === 0 && (
+      {st.state === 'done' && !stale && others.length > 0 && (
+        <div className="exclusion-summary">
+          <strong>Left out automatically ({others.length}):</strong> {excludedText || 'not clearly relevant to this target'}.{' '}
+          <button className="link-btn" onClick={() => setShowExcluded(!showExcluded)}>{showExcluded ? 'Hide them' : 'Show them (optional)'}</button>
+        </div>
+      )}
+      {st.state === 'done' && !stale && included.length === 0 && (
         <div className="alert-gap">
           <strong>No relevant GSC evidence found</strong> for "{group.name}" in {datasetLabel(dataset)}
           {st.level === 'broad' ? ' — even with broader matching' : ''}. Keywords are only generated from real search queries, so nothing will be generated for this ad group yet.
@@ -111,7 +124,7 @@ export default function SeedPanel({
           </div>
         </div>
       )}
-      {sparse && !stale && seeds.length > 0 && (
+      {sparse && !stale && included.length > 0 && (
         <div className="hint-gap" style={{ marginBottom: 10 }}>
           Limited evidence ({selected.length} selected). Sparse data is still used.
           {st.level !== 'broad' && <> <button className="link-btn" onClick={() => onSetLevel('broad')}>Broaden matching</button></>}
@@ -136,12 +149,12 @@ export default function SeedPanel({
         </div>
       )}
 
-      {seeds.length > 0 && (
+      {list.length > 0 && (
         <>
           <div className="preview-toolbar" style={{ marginTop: 10 }}>
-            <button className="btn-secondary btn-sm" onClick={() => onToggleSeeds(seeds.filter(s => !s.flags.length).map(s => s.id), true)}>Select all unflagged</button>
+            <button className="btn-secondary btn-sm" onClick={() => onToggleSeeds(seeds.filter(s => !s.flags.length && s.relevance?.verdict === 'relevant').map(s => s.id), true)}>Select all relevant</button>
             <button className="btn-secondary btn-sm" onClick={() => onToggleSeeds(seeds.map(s => s.id), false)}>Clear all</button>
-            <span className="cta-hint" style={{ margin: 0 }}>Flagged queries (care/informational, branded, unrelated plants, long queries) stay visible but start unselected.</span>
+            <span className="cta-hint" style={{ margin: 0 }}>Only queries clearly relevant to this target are selected. Review is optional.</span>
           </div>
           <div className="table-wrapper" style={{ marginBottom: 12 }}>
             <table className="data-table seed-table">
@@ -190,15 +203,18 @@ export default function SeedPanel({
                       <td className="num">{e ? fmtPct(e.ctr) : '—'}</td>
                       <td className="num">{e ? fmtPos(e.position) : '—'}</td>
                       <td className="period-cell">{e ? (e.periodStart ? `${e.periodStart} → ${e.periodEnd}` : 'not stated') : '—'}</td>
-                      <td className="reason-cell">{s.origin === 'derived' ? `${s.reasons.join(' · ')} · source: "${s.derivedFrom.slice(0, 80)}${s.derivedFrom.length > 80 ? '…' : ''}"` : s.reasons.join(' · ')}</td>
+                      <td className="reason-cell">
+                        {s.relevance && <div className={s.relevance.verdict === 'relevant' ? 'rel-ok' : 'rel-bad'}>{relevanceLabel(s.relevance)}</div>}
+                        {s.origin === 'derived' ? `${s.reasons.join(' · ')} · source: "${s.derivedFrom.slice(0, 80)}${s.derivedFrom.length > 80 ? '…' : ''}"` : s.reasons.join(' · ')}
+                      </td>
                     </tr>
                   )
                 })}
               </tbody>
             </table>
-            {seeds.length > SHOW && (
+            {list.length > SHOW && (
               <p className="table-hint">
-                Showing {visible.length} of {seeds.length}. <button className="link-btn" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : 'Show all'}</button>
+                Showing {visible.length} of {list.length}. <button className="link-btn" onClick={() => setShowAll(!showAll)}>{showAll ? 'Show fewer' : 'Show all'}</button>
               </p>
             )}
           </div>

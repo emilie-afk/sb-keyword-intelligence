@@ -211,8 +211,10 @@ describe('6 · outdated evidence and late responses', () => {
     const g = addProduct()
     await findSeeds({ groupId: g.id, ...ctx(), dataset: ds })
     const slow = deferred()
-    const api = { generateKeywords: () => slow.promise }
+    const asked = deferred()
+    const api = { ...mockApi(), generateKeywords: () => { asked.resolve(); return slow.promise } }
     const run = runKeywordGeneration({ groupIds: [g.id], ...ctx(), api, dataset: ds })
+    await asked.promise // validation done, observed queries added, AI request in flight
     await findSeeds({ groupId: g.id, ...ctx(), dataset: ds, level: 'broad' }) // new evidence version
     slow.resolve({ keywords: [{ keyword: 'calico kitten crassula delivered', seedRefs: ['calico kitten crassula'] }] })
     const [o] = await run

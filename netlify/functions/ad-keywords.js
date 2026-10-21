@@ -11,9 +11,6 @@ const json = (statusCode, body) => ({
 
 export const handler = async (event) => {
   if (event.httpMethod !== 'POST') return json(405, { error: 'Method not allowed' })
-  const apiKey = process.env.ANTHROPIC_API_KEY
-  if (!apiKey) return json(500, { error: 'ANTHROPIC_API_KEY is not set' })
-
   let body
   try {
     body = JSON.parse(event.body || '{}')
@@ -21,6 +18,9 @@ export const handler = async (event) => {
     return json(400, { error: `Bad request: ${err.message}` })
   }
 
+  // 'validate' needs no model; generation does
+  const apiKey = process.env.ANTHROPIC_API_KEY
+  if (!apiKey && body?.action !== 'validate') return json(500, { error: 'ANTHROPIC_API_KEY is not set' })
   try {
     return json(200, await handleRequest(body, anthropicCaller(apiKey)))
   } catch (err) {

@@ -9,6 +9,7 @@ import {
   INDIVIDUAL_PLANT_TERMS, NONEXISTENT_PRODUCT_TERMS, isInformational, exceedsAdsKeywordLimits, normalizeKeyword, CATEGORY_DESCRIPTIONS,
 } from '../shared/keywordRules.js'
 import { CATEGORY_KEYWORDS, BRAND_TERMS } from './categorize.js'
+import { assessKeyword, REASONS } from '../shared/relevance.js'
 
 // Words that never make a query relevant on their own
 const STOPWORDS = new Set(`a an the for of to in on at by with and or & my your you yours our her him his she he me i it its
@@ -222,7 +223,7 @@ export function targetContextText(target) {
 }
 
 // Match the site-wide dataset to a target. No click/impression minimum.
-export function findSiteWideSeeds(queries, target, dataset, { level = 'strict', limit = 150 } = {}) {
+export function findSiteWideSeeds(queries, target, dataset, { level = 'strict', limit = 150, relTarget = null } = {}) {
   const profile = buildProfile(target, level)
   const ctx = targetContextText(target)
   const csv = dataset?.source === 'csv_upload'
@@ -233,9 +234,13 @@ export function findSiteWideSeeds(queries, target, dataset, { level = 'strict', 
   for (const row of queries || []) {
     if (!normalizeKeyword(row.query)) continue
     const m = matchQuery(row.query, profile, level)
-    if (!m.relevant) continue
-    out.push(makeSeed({ query: row.query, evidence: [evidenceFrom(row, 'site-wide', dataset)], reasons: [...m.reasons, scope], score: m.score, mode: target.mode, contextText: ctx }))
+    // Recall also comes from the shared relevance rules, so relevant queries without word overlap are found
+    const r = relTarget ? assessKeyword(row.query, relTarget) : null
+    if (!m.relevant && r?.verdict !== 'relevant') continue
+    const reasons = m.relevant ? [...m.reasons, scope] : [`fits the target (${r.detail})`, scope]
+    out.push(makeSeed({ query: row.query, evidence: [evidenceFrom(row, 'site-wide', dataset)], reasons, score: m.score + (r?.verdict === 'relevant' ? 100 : 0), mode: target.mode, contextText: ctx }))
   }
+  // Relevant candidates first, so the limit never pushes them out
   return mergeSeedLists(out).slice(0, limit)
 }
 
@@ -328,3 +333,19 @@ export function makeDerivedSeed(source, themeText, mode, contextText) {
   })
   return { ...seed, derivedFrom: source.query, selected: true }
 }
+
+// ── Target relevance on seeds ──
+// Every seed carries a relevance verdict. Only clearly relevant, unflagged seeds are selected by default;
+// uncertain and excluded seeds stay out of generation unless the target changes.
+export function withRelevance(seed, relTarget, { previous = null } = {}) {
+  const relevance = assessKeyword(seed.query, relTarget)
+  const ok = relevance.verdict === 'relevant'
+  const autoSelect = ok && seed.flags.length === 0
+  // Keep a user's deselection; never keep an irrelevant seed selected
+  const selected = previous ? previous.selected && ok : (seed.origin === 'manual' || seed.origin === 'derived') ? seed.selected && ok : autoSelect
+  return { ...seed, relevance, selected }
+}
+
+export const relevanceLabel = r => (!r ? '' : r.verdict === 'relevant'
+  ? `relevant${r.detail ? ` (${r.detail})` : ''}`
+  : `${r.verdict === 'excluded' ? 'excluded' : 'uncertain'}: ${(REASONS[r.reason] || r.reason).toLowerCase()}${r.detail ? ` (${r.detail})` : ''}`)
