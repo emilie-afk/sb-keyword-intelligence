@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { FLAG_LABELS, primaryEvidence, searchDataset } from '../lib/seedMatching'
+import { FLAG_LABELS, primaryEvidence, searchDataset, suggestTheme } from '../lib/seedMatching'
 import { normalizeKeyword } from '../shared/keywordRules'
 import { scopeLabel, evidenceProblem, datasetKey, datasetRef, targetSignature } from '../lib/workspace'
 
@@ -17,11 +17,12 @@ export function datasetLabel(ds) {
 // Review the GSC evidence (seed queries) for one ad group before generating keywords
 export default function SeedPanel({
   group, dataset, canLoadPageLevel, canExtendPeriod, busy,
-  onFindSeeds, onSetLevel, onExtendPeriod, onToggleSeeds, onAddManual, onSetAliases, onGenerate, kwCount, setKwCount,
+  onFindSeeds, onSetLevel, onExtendPeriod, onToggleSeeds, onAddManual, onAddDerived, onSetAliases, onGenerate, kwCount, setKwCount,
 }) {
   const [showAll, setShowAll] = useState(false)
   const [search, setSearch] = useState('')
   const [aliasText, setAliasText] = useState((group.aliases || []).join(', '))
+  const [themeDrafts, setThemeDrafts] = useState({}) // seedId → editable theme text
   const seeds = group.seeds || []
   const st = group.seedStatus || {}
   const selected = seeds.filter(s => s.selected)
@@ -140,7 +141,7 @@ export default function SeedPanel({
           <div className="preview-toolbar" style={{ marginTop: 10 }}>
             <button className="btn-secondary btn-sm" onClick={() => onToggleSeeds(seeds.filter(s => !s.flags.length).map(s => s.id), true)}>Select all unflagged</button>
             <button className="btn-secondary btn-sm" onClick={() => onToggleSeeds(seeds.map(s => s.id), false)}>Clear all</button>
-            <span className="cta-hint" style={{ margin: 0 }}>Flagged queries (care/informational, branded, unrelated plants) stay visible but start unselected.</span>
+            <span className="cta-hint" style={{ margin: 0 }}>Flagged queries (care/informational, branded, unrelated plants, long queries) stay visible but start unselected.</span>
           </div>
           <div className="table-wrapper" style={{ marginBottom: 12 }}>
             <table className="data-table seed-table">
@@ -159,27 +160,37 @@ export default function SeedPanel({
               </thead>
               <tbody>
                 {visible.map(s => {
-                  const e = primaryEvidence(s)
-                  const other = s.evidence.find(x => x !== e)
+                  const e = primaryEvidence(s) // null for derived themes: they have no metrics of their own
+                  const other = e ? s.evidence.find(x => x !== e) : null
+                  const longQuery = s.flags.includes('too long')
+                  const draft = themeDrafts[s.id] ?? suggestTheme(s.query)
                   return (
                     <tr key={s.id} className={s.selected ? '' : 'row-muted'}>
                       <td><input type="checkbox" checked={s.selected} disabled={loading || stale} onChange={ev => onToggleSeeds([s.id], ev.target.checked)} aria-label={`Use ${s.query}`} /></td>
                       <td className="query-cell" title={s.query}>
-                        {s.query}
+                        <div className={longQuery ? 'long-query' : ''}>{s.query}</div>
                         {s.flags.map(f => <span key={f} className="badge badge-gap flag-badge">{FLAG_LABELS[f] || f}</span>)}
                         {s.origin === 'manual' && <span className="badge badge-info flag-badge">Manual</span>}
+                        {s.origin === 'derived' && <span className="badge badge-suggested flag-badge" title={`From: ${s.derivedFrom}`}>Derived theme</span>}
                         {s.evidence.length > 1 && <span className="muted" style={{ marginLeft: 6 }} title="Page-level and site-wide metrics are shown separately and never added together">(2 scopes)</span>}
+                        {longQuery && !stale && (
+                          <div className="theme-extract">
+                            <span className="muted">Extract a short theme (no metrics carried over):</span>
+                            <input className="input input-inline" value={draft} onChange={ev => setThemeDrafts(d => ({ ...d, [s.id]: ev.target.value }))} aria-label="Theme to extract" />
+                            <button className="btn-secondary btn-sm" disabled={busy || !draft.trim()} onClick={() => onAddDerived(s.id, draft)}>Add as derived theme</button>
+                          </div>
+                        )}
                       </td>
                       <td>
-                        <span className={`badge ${e.scope === 'page' ? 'badge-ok' : 'badge-gsc'}`}>{scopeLabel(e)}</span>
+                        {e ? <span className={`badge ${e.scope === 'page' ? 'badge-ok' : 'badge-gsc'}`}>{scopeLabel(e)}</span> : <span className="badge badge-suggested">Derived</span>}
                         {other && <div className="muted" title={`${scopeLabel(other)}: ${other.clicks} clicks · ${other.impressions} impr.`}>+ {scopeLabel(other).toLowerCase()}</div>}
                       </td>
-                      <td className="num">{e.clicks.toLocaleString()}</td>
-                      <td className="num">{e.impressions.toLocaleString()}</td>
-                      <td className="num">{fmtPct(e.ctr)}</td>
-                      <td className="num">{fmtPos(e.position)}</td>
-                      <td className="period-cell">{e.periodStart ? `${e.periodStart} → ${e.periodEnd}` : 'not stated'}</td>
-                      <td className="reason-cell">{s.reasons.join(' · ')}</td>
+                      <td className="num">{e ? e.clicks.toLocaleString() : '—'}</td>
+                      <td className="num">{e ? e.impressions.toLocaleString() : '—'}</td>
+                      <td className="num">{e ? fmtPct(e.ctr) : '—'}</td>
+                      <td className="num">{e ? fmtPos(e.position) : '—'}</td>
+                      <td className="period-cell">{e ? (e.periodStart ? `${e.periodStart} → ${e.periodEnd}` : 'not stated') : '—'}</td>
+                      <td className="reason-cell">{s.origin === 'derived' ? `${s.reasons.join(' · ')} · source: "${s.derivedFrom.slice(0, 80)}${s.derivedFrom.length > 80 ? '…' : ''}"` : s.reasons.join(' · ')}</td>
                     </tr>
                   )
                 })}
