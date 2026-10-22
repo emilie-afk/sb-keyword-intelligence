@@ -206,6 +206,10 @@ export default function AdKeywordsPage({
 
   return (
     <div className="page">
+      {working && <p role="status" aria-live="polite">Finding GSC evidence… {project.adGroups.filter(g => g.seedStatus?.state === 'loading').map(g => {
+        const pr = g.seedStatus.progress
+        return `${g.name}: ${pr ? `${pr.done.toLocaleString()} / ${pr.total.toLocaleString()} queries` : 'starting'}`
+      }).join(' · ')}</p>}
       {/* Project bar */}
       <div className="project-bar">
         <input className="input project-name" value={project.name} onChange={e => setP(p => ({ ...p, name: e.target.value }))} aria-label="Project name" />
