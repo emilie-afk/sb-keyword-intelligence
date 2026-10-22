@@ -25,7 +25,17 @@ function stem(w) {
 const norm = t => normalizeKeyword(String(t || '').replace(/['’]s\b/g, 's').replace(/['’]/g, ''))
 const toks = t => norm(t).split(' ').filter(Boolean).map(stem)
 const padded = t => ` ${toks(t).join(' ')} `
-const has = (pq, phrase) => pq.includes(` ${toks(phrase).join(' ')} `)
+// Vocabulary phrases repeat across every query. Normalize them once rather than per row.
+const phraseCache = new Map()
+const has = (pq, phrase) => {
+  let key = phraseCache.get(phrase)
+  if (!key) {
+    key = ` ${toks(phrase).join(' ')} `
+    if (phraseCache.size >= 2048) phraseCache.clear()
+    phraseCache.set(phrase, key)
+  }
+  return pq.includes(key)
+}
 const hasAny = (pq, list) => list.find(p => has(pq, p)) || null
 
 // ── vocabularies ──

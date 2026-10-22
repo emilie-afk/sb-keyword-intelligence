@@ -17,7 +17,7 @@ import {
 import { categorizeQuery } from './categorize.js'
 import { mapLimit } from './api.js'
 import {
-  findSiteWideSeeds, pageSeeds, mergeSeedLists, makeSeed, evidenceFrom, primaryEvidence, targetContextText, makeDerivedSeed,
+  findSiteWideSeeds, findSiteWideSeedsAsync, pageSeeds, mergeSeedLists, makeSeed, evidenceFrom, primaryEvidence, targetContextText, makeDerivedSeed,
   withRelevance,
 } from './seedMatching.js'
 import { relevanceTarget, assessKeyword, summarizeExclusions } from '../shared/relevance.js'
@@ -265,11 +265,31 @@ export async function findSeeds({ groupId, getProject, setProject, dataset, leve
   }
 
   const relTarget = groupRelevanceTarget(group)
-  const siteList = findSiteWideSeeds(dataset.queries, target, dataset, { level: useLevel, relTarget })
+  const isCurrent = () => {
+    const g = getProject().adGroups.find(x => x.id === groupId)
+    return !!g && g.seedStatus?.requestId === requestId && targetSignature(g) === signature
+  }
+  const siteList = await findSiteWideSeedsAsync(dataset.queries, target, dataset, {
+    level: useLevel, relTarget, isCurrent,
+    onProgress: progress => {
+      if (isCurrent()) setProject(p => updateGroup(p, groupId, g => ({
+        ...g, seedStatus: { ...g.seedStatus, progress },
+      })))
+    },
+  })
+  const discardMatch = () => {
+    // Only this request may clear its loading state; never reset a newer match.
+    setProject(p => updateGroup(p, groupId, g =>
+      g.seedStatus?.requestId === requestId && g.seedStatus.state === 'loading'
+        ? { ...g, seedStatus: { ...g.seedStatus, state: 'none', progress: null, requestId: null, error: null } }
+        : g))
+    return { discarded: true }
+  }
+  if (!siteList) return discardMatch()
   const current = getProject().adGroups.find(g => g.id === groupId)
   // Late response? Discard it.
   if (!current || current.seedStatus?.requestId !== requestId || targetSignature(current) !== signature) {
-    return { discarded: true }
+    return discardMatch()
   }
 
   // Manual seeds: re-read their evidence from THIS dataset; drop them if the query isn't in it

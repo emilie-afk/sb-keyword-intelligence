@@ -349,3 +349,32 @@ export function withRelevance(seed, relTarget, { previous = null } = {}) {
 export const relevanceLabel = r => (!r ? '' : r.verdict === 'relevant'
   ? `relevant${r.detail ? ` (${r.detail})` : ''}`
   : `${r.verdict === 'excluded' ? 'excluded' : 'uncertain'}: ${(REASONS[r.reason] || r.reason).toLowerCase()}${r.detail ? ` (${r.detail})` : ''}`)
+
+
+// Yield to rendering and input between batches; never leave a large dataset on the UI thread.
+export async function findSiteWideSeedsAsync(queries, target, dataset, {
+  level = 'strict', limit = 150, relTarget = null, batchSize = 250,
+  onProgress, isCurrent = () => true, progressEveryMs = 150,
+  yieldToUI = () => new Promise(resolve => setTimeout(resolve, 0)),
+} = {}) {
+  const rows = queries || []
+  const out = []
+  onProgress?.({ done: 0, total: rows.length })
+  let lastReport = Date.now()
+  await yieldToUI()
+  for (let i = 0; i < rows.length; i += batchSize) {
+    if (!isCurrent()) return null
+    out.push(...findSiteWideSeeds(rows.slice(i, i + batchSize), target, dataset,
+      { level, limit: Infinity, relTarget }))
+    // Each progress update re-renders the page — report at most every ~150 ms (and always the last batch)
+    const done = Math.min(i + batchSize, rows.length)
+    const now = Date.now()
+    if (done === rows.length || now - lastReport >= progressEveryMs) {
+      lastReport = now
+      onProgress?.({ done, total: rows.length })
+    }
+    await yieldToUI()
+  }
+  if (!isCurrent()) return null
+  return mergeSeedLists(out).slice(0, limit)
+}
