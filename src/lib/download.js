@@ -58,3 +58,21 @@ export function downloadQueriesCSV(queries) {
   const date = new Date().toISOString().split('T')[0]
   downloadFile(csv, `sb-search-queries-${date}.csv`, 'text/csv;charset=utf-8;')
 }
+
+// Copy text to the clipboard; falls back to a hidden textarea where the Clipboard API is unavailable
+export async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true }
+  } catch { /* fall back below */ }
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.setAttribute('readonly', '')
+  ta.style.position = 'fixed'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.select()
+  let ok = false
+  try { ok = document.execCommand('copy') } catch { ok = false }
+  document.body.removeChild(ta)
+  return ok
+}

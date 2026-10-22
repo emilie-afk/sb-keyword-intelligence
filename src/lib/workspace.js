@@ -744,6 +744,21 @@ export function rowsToCsv(rows) {
   return [header, ...lines].join('\n')
 }
 
+// ── Copy to clipboard ──
+// Keywords as shown in the table (match-type syntax: "phrase", [exact], broad), one per line, no duplicates.
+// Pastes straight into Google Ads (keyword box) or Google Ads Editor.
+export function rowsToKeywordText(rows) {
+  return [...new Set(rows.map(r => r.keyword))].join('\n')
+}
+
+// Tab-separated table with a header row — pastes into Google Sheets / Excel as columns
+const tsvCell = v => String(v ?? '').replace(/[\t\r\n]+/g, ' ').trim()
+export function rowsToTsv(rows) {
+  const header = EXPORT_COLUMNS.map(([label]) => label).join('\t')
+  const lines = rows.map(r => EXPORT_COLUMNS.map(([, get]) => tsvCell(get(r))).join('\t'))
+  return [header, ...lines].join('\n')
+}
+
 // ── Persistence helpers ──
 
 // Strip transient UI state before saving. Seeds (with evidence and selection) are saved.

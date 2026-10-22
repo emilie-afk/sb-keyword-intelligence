@@ -6,11 +6,11 @@ import {
   ensureCategoryGroups, categoryGroupIds, createPageGroup, pageSnapshot, guessCategory, updateGroup,
   removeGroup, runKeywordGeneration, buildHeadlineBatches, runHeadlineBatches, projectRows, filterRows,
   removeKeywords, setMatchType, editKeyword, mergeKeywords, findSeeds, setSeedSelection, addManualSeed,
-  selectedSeeds, datasetRef, scopeLabel, evidenceProblem, addDerivedSeed, cleanProject,
+  selectedSeeds, datasetRef, scopeLabel, evidenceProblem, addDerivedSeed, cleanProject, rowsToKeywordText, rowsToTsv,
 } from '../lib/workspace'
 import { api } from '../lib/api'
 import { saveProject } from '../lib/supabase'
-import { downloadKeywordRows } from '../lib/download'
+import { downloadKeywordRows, copyText } from '../lib/download'
 import PagePreview from '../components/PagePreview'
 import SeedPanel, { datasetLabel } from '../components/SeedPanel'
 import { exclusionSummaryText } from '../shared/relevance'
@@ -158,6 +158,18 @@ export default function AdKeywordsPage({
   const filtered = useMemo(() => filterRows(rows, { groupId: groupFilter, source: sourceFilter, matchType: matchFilter }), [rows, groupFilter, sourceFilter, matchFilter])
   const liveSelected = useMemo(() => new Set(rows.filter(r => selectedRows.has(r.rowId)).map(r => r.rowId)), [rows, selectedRows])
   const selectedKeywordIds = useMemo(() => [...new Set(rows.filter(r => liveSelected.has(r.rowId)).map(r => r.keywordId))], [rows, liveSelected])
+  // Copy: the selected rows (in table order), or every row matching the filters when nothing is selected
+  const copyRows = useMemo(() => (liveSelected.size ? rows.filter(r => liveSelected.has(r.rowId)) : filtered), [rows, filtered, liveSelected])
+  const [copied, setCopied] = useState(null)
+  const copiedTimer = useRef(null)
+  const copyRowsAs = async (kind) => {
+    const text = kind === 'table' ? rowsToTsv(copyRows) : rowsToKeywordText(copyRows)
+    const n = kind === 'table' ? copyRows.length : new Set(copyRows.map(r => r.keyword)).size
+    const ok = await copyText(text)
+    setCopied(ok ? `Copied ${n} ${kind === 'table' ? `row${n === 1 ? '' : 's'} as a table` : `keyword${n === 1 ? '' : 's'}`}` : 'Copy failed — your browser blocked clipboard access')
+    clearTimeout(copiedTimer.current)
+    copiedTimer.current = setTimeout(() => setCopied(null), 3000)
+  }
   const allFilteredSelected = filtered.length > 0 && filtered.every(r => liveSelected.has(r.rowId))
   const flaggedIds = useMemo(() => [...new Set(rows.filter(r => r.headlineStatus === 'invalid').map(r => r.keywordId))], [rows])
 
@@ -469,6 +481,13 @@ export default function AdKeywordsPage({
               </span>
             ))}
             <button className="btn-secondary btn-sm" disabled={busy || !selectedKeywordIds.length} onClick={() => { setP(p => removeKeywords(p, selectedKeywordIds)); setSelectedRows(new Set()) }}>Remove keywords</button>
+            <button className="btn-secondary btn-sm" disabled={!copyRows.length} title="One keyword per line, with match-type syntax — paste into Google Ads or Ads Editor" onClick={() => copyRowsAs('keywords')}>
+              ⧉ Copy {liveSelected.size ? 'selected' : 'all'} keywords
+            </button>
+            <button className="btn-secondary btn-sm" disabled={!copyRows.length} title="All columns, tab-separated — paste into Google Sheets or Excel" onClick={() => copyRowsAs('table')}>
+              ⧉ Copy as table
+            </button>
+            {copied && <span role="status" className="copy-status">{copied}</span>}
             <button className="btn-ghost" disabled={!liveSelected.size} onClick={() => setSelectedRows(new Set())}>Clear selection</button>
           </div>
 
