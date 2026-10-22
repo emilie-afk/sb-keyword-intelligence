@@ -13,6 +13,7 @@
 
 import {
   exceedsAdsKeywordLimits, CATEGORIES, CATEGORY_LANDING_PAGES, MATCH_TYPES, formatMatchType, normalizeKeyword, normalizeSource, SOURCES,
+  restrictedTopic,
 } from '../shared/keywordRules.js'
 import { categorizeQuery } from './categorize.js'
 import { mapLimit } from './api.js'
@@ -388,9 +389,11 @@ export function mergeKeywords(group, items, source) {
   const byBase = new Map(group.keywords.map(k => [k.base, k]))
   let keywords = group.keywords
   let added = 0
+  let restricted = 0
   for (const item of items) {
     const base = normalizeKeyword(typeof item === 'string' ? item : item.base ?? item.keyword)
     if (!base) continue
+    if (restrictedTopic(base)) { restricted++; continue } // Google Ads restricted topic — never added, even manually
     const existing = byBase.get(base)
     if (existing) {
       if (source === 'gsc_observed' && ['ai_expansion', 'gsc_observed', 'gsc_derived'].includes(existing.source)) {
@@ -409,12 +412,13 @@ export function mergeKeywords(group, items, source) {
     byBase.set(base, kw)
     added++
   }
-  return { group: keywords === group.keywords ? group : { ...group, keywords }, added }
+  return { group: keywords === group.keywords ? group : { ...group, keywords }, added, restricted }
 }
 
 export function editKeyword(group, keywordId, newText) {
   const base = normalizeKeyword(newText)
   if (!base) return group
+  if (restrictedTopic(base)) return group // restricted ad topic (fertility, IVF)
   if (group.keywords.some(k => k.id !== keywordId && k.base === base)) return group // would duplicate
   return {
     ...group,
@@ -590,7 +594,7 @@ export function cleanProject(project) {
     const keywords = g.keywords.filter(k => {
       const r = assessKeyword(k.base, relTarget)
       if (r.verdict === 'relevant') return true
-      if (k.source === 'manual') { keptManual++; return true }
+      if (k.source === 'manual' && r.reason !== 'restricted') { keptManual++; return true } // restricted topics go, even if typed in
       removedItems.push({ text: k.base, reason: r.reason })
       return false
     })

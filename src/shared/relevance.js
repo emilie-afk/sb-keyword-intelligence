@@ -12,7 +12,7 @@
 //
 // Generic overlap ("plant", "box", "well", "best", …) never makes a query relevant.
 
-import { normalizeKeyword, exceedsAdsKeywordLimits, NONEXISTENT_PRODUCT_TERMS, isInformational } from './keywordRules.js'
+import { normalizeKeyword, exceedsAdsKeywordLimits, NONEXISTENT_PRODUCT_TERMS, isInformational, restrictedTopic } from './keywordRules.js'
 
 // ── text helpers ──
 function stem(w) {
@@ -117,6 +117,7 @@ const OTHER_CATEGORY_ANCHORS = {
 export const REASONS = {
   relevant: 'Relevant',
   too_long: 'Too long for Google Ads',
+  restricted: 'Restricted ad topic (fertility, IVF)',
   advice: 'Care, advice or growing-conditions question',
   research: 'Research query (reviews, codes)',
   supplies: 'Soil, growing media or supplies',
@@ -142,6 +143,8 @@ export function giftingSignal(text) {
 export function adIntentProblem(text, target = {}) {
   const k = norm(text)
   if (!k) return result('excluded', 'no_anchor', 'empty')
+  const restricted = restrictedTopic(k)
+  if (restricted) return result('excluded', 'restricted', restricted)
   if (exceedsAdsKeywordLimits(k)) return result('excluded', 'too_long')
   if (NONEXISTENT_PRODUCT_TERMS.some(t => k.includes(t))) return result('excluded', 'not_sold')
   const targetText = norm(target.text || '')
