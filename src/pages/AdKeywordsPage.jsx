@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react'
 import {
-  CATEGORIES, CATEGORY_COLORS, MATCH_TYPES, SOURCES, HEADLINE_MAX, isAllowedStoreHost, parseStoreUrl,
+  CATEGORIES, CATEGORY_COLORS, MATCH_TYPES, SOURCES, HEADLINE_MAX, isAllowedStoreHost, parseStoreUrl, restrictedTopic,
 } from '../shared/keywordRules'
 import {
   ensureCategoryGroups, categoryGroupIds, createPageGroup, pageSnapshot, guessCategory, updateGroup,
@@ -161,6 +161,7 @@ export default function AdKeywordsPage({
   // Copy: the selected rows (in table order), or every row matching the filters when nothing is selected
   const copyRows = useMemo(() => (liveSelected.size ? rows.filter(r => liveSelected.has(r.rowId)) : filtered), [rows, filtered, liveSelected])
   const [copied, setCopied] = useState(null)
+  const [manualNote, setManualNote] = useState(null)
   const copiedTimer = useRef(null)
   const copyRowsAs = async (kind) => {
     const text = kind === 'table' ? rowsToTsv(copyRows) : rowsToKeywordText(copyRows)
@@ -374,11 +375,15 @@ export default function AdKeywordsPage({
                       onChange={e => setManualInputs(m => ({ ...m, [g.id]: e.target.value }))}
                       onKeyDown={e => {
                         if (e.key === 'Enter' && manualInputs[g.id]?.trim()) {
+                          const term = restrictedTopic(manualInputs[g.id])
+                          if (term) { setManualNote({ groupId: g.id, text: `Not added: “${term}” is a Google Ads restricted topic (fertility, IVF).` }); return }
+                          setManualNote(null)
                           setP(p => updateGroup(p, g.id, x => mergeKeywords(x, [manualInputs[g.id]], 'manual').group))
                           setManualInputs(m => ({ ...m, [g.id]: '' }))
                         }
                       }} />
                   </div>
+                  {manualNote?.groupId === g.id && <div className="hint-bad">{manualNote.text}</div>}
                   <div className="action-row">
                     <button className="btn-secondary btn-sm" onClick={() => setActiveGroupId(g.id)}>{activeGroupId === g.id ? 'Reviewing evidence ↓' : 'Review evidence'}</button>
                     <button className="btn-secondary btn-sm" disabled={busy || !!evidenceProblem(g, dataset)} title={evidenceProblem(g, dataset) || ''} onClick={() => generateForGroups([g.id])}>Generate</button>
@@ -456,7 +461,7 @@ export default function AdKeywordsPage({
             <button className="btn-secondary btn-sm" disabled={busy} onClick={() => { const r = cleanProject(store.getProject()); setP(r.project); setSelectedRows(new Set()); setCleanResult(r) }}>
               ✓ Clean existing results
             </button>
-            <span className="cta-hint" style={{ margin: 0 }}>Removes keywords (all match types) that aren’t relevant to their ad group’s target. Keywords you typed in are kept.</span>
+            <span className="cta-hint" style={{ margin: 0 }}>Removes keywords (all match types) that aren’t relevant to their ad group’s target. Keywords you typed in are kept, except fertility/IVF terms (Google Ads restricted topic).</span>
           </div>
           {cleanResult && (
             <div className={cleanResult.totalRemoved ? 'exclusion-summary' : 'status-success'} style={{ marginBottom: 10 }}>

@@ -138,10 +138,16 @@ export function exceedsAdsKeywordLimits(keyword) {
 // Returns { ok: boolean, reason?: string }.
 // mode: 'category' | 'collection' | 'product'
 // contextText: page title/description/selected product names (collection/product modes)
+// Google Ads restricted category "Birth Control, Fertility, and Testing" — never advertise on these
+// ("ivf gift box", "fertility plant", "transfer day gift for ivf" …)
+const RESTRICTED_TOPIC = /\b(ivf|in vitro|fertility|infertility|infertile|embryo transfer|egg retrieval)\b/
+export const restrictedTopic = keyword => (normalizeKeyword(keyword).match(RESTRICTED_TOPIC) || [])[0] || null
+
 export function checkKeywordEligibility(keyword, mode, contextText = '') {
   const k = normalizeKeyword(keyword)
   if (!k) return { ok: false, reason: 'empty' }
   if (exceedsAdsKeywordLimits(k)) return { ok: false, reason: 'too long for Google Ads (max 80 characters / 10 words)' }
+  if (restrictedTopic(k)) return { ok: false, reason: 'restricted ad topic (fertility, IVF)' }
   if (NONEXISTENT_PRODUCT_TERMS.some(t => k.includes(t))) return { ok: false, reason: 'product we do not sell' }
   if (isInformational(k)) return { ok: false, reason: 'informational query' }
 
@@ -169,6 +175,7 @@ export function validateHeadlines(headlines) {
     const s = typeof h === 'string' ? h.trim() : ''
     if (!s) issues.push(`headline ${i + 1} is empty`)
     else if (s.length > HEADLINE_MAX) issues.push(`headline ${i + 1} is ${s.length} chars (max ${HEADLINE_MAX})`)
+    else if (restrictedTopic(s)) issues.push(`headline ${i + 1} mentions a restricted topic (${restrictedTopic(s)})`)
   })
   return { valid: issues.length === 0, issues }
 }

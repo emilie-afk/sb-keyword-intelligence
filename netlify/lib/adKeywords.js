@@ -151,6 +151,7 @@ Rules:
 ${MODE_RULES[adGroup.mode]}
 - Stay relevant to the FACTS; do not introduce products or features that are not in FACTS.
 - No care/how-to/informational queries.
+- Never use fertility, IVF or infertility terms (Google Ads restricted category).
 - Only products Succulents Box actually sells (no cactus subscription box, no air plant subscription).
 - Lowercase, no match-type punctuation, 2–7 words each.
 - Do not include search volume, CPC or any metrics.
@@ -171,6 +172,7 @@ Rules:
 - Only state contents, quantities, variants, personalization, prices, shipping or discounts if they appear in FACTS.
 - In collection mode, never apply one product's feature to the whole collection.
 - Do not mention competitors or make unverifiable superlatives.
+- Never mention fertility, IVF or infertility (Google Ads restricted category).
 
 Keywords:
 ${keywords.map(k => `- ${k}`).join('\n')}
