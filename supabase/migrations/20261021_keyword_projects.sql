@@ -1,5 +1,5 @@
 -- SB Keyword Intelligence — keyword projects (Ad Keywords workspace)
--- NOT YET APPLIED TO PRODUCTION. Review, then run in Supabase: SQL Editor → New query → paste & run.
+-- Applied to production on 2026-10-21, when it still created a public policy (now removed from this file).
 -- Safe to run more than once. Does not modify or delete existing data.
 
 -- ─────────────────────────────────────────────
@@ -28,12 +28,9 @@ create table if not exists keyword_projects (
 
 alter table keyword_projects enable row level security;
 
--- Same access model as the existing tables (site is protected by Netlify password)
+-- No public policy. Approved-member access is installed by 20261023_access_control.sql.
+-- (An earlier version of this file created an always-true policy; it is removed here and by 20261023.)
 drop policy if exists "Public access for keyword_projects" on keyword_projects;
-create policy "Public access for keyword_projects"
-  on keyword_projects for all
-  using (true)
-  with check (true);
 
 create index if not exists idx_keyword_projects_updated_at on keyword_projects(updated_at desc);
 

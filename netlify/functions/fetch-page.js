@@ -1,26 +1,15 @@
 // POST { url } -> { page } | { error, code }
 // Loads a Succulents Box collection or product page server-side for the Ad Keywords preview.
+// Requires an approved member's verified session before anything is fetched.
 import { fetchPageInfo, PageError } from '../lib/shopifyPage.js'
+import { protectedHandler, HttpError } from '../lib/auth.js'
 
-const json = (statusCode, body) => ({
-  statusCode,
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(body),
-})
-
-export const handler = async (event) => {
-  if (event.httpMethod !== 'POST') return json(405, { error: 'Method not allowed' })
-  let url
+export const handler = protectedHandler({ maxBodyBytes: 4 * 1024, action: 'fetch_page' }, async (body, { pageFetch }) => {
+  if (typeof body.url !== 'string' || body.url.length > 2048) throw new HttpError(400, 'bad_request', 'Paste a Succulents Box collection or product URL.')
   try {
-    url = JSON.parse(event.body || '{}').url
-  } catch {
-    return json(400, { error: 'Bad request', code: 'bad_request' })
-  }
-  try {
-    const page = await fetchPageInfo(url)
-    return json(200, { page })
+    return { page: await fetchPageInfo(body.url, pageFetch ? { fetchImpl: pageFetch } : undefined) }
   } catch (err) {
-    if (err instanceof PageError) return json(err.status, { error: err.message, code: err.code })
-    return json(500, { error: 'Could not load the page.', code: 'internal' })
+    if (err instanceof PageError) throw new HttpError(err.status, err.code, err.message)
+    throw new HttpError(500, 'internal', 'Could not load the page.')
   }
-}
+})

@@ -34,11 +34,6 @@ export const CATEGORY_LANDING_PAGES = {
   'Air Plants': 'https://succulentsbox.com/collections/air-plants-tillandsias',
 }
 
-export const BRAND_CONTEXT = `Succulents Box (succulentsbox.com) sells:
-- Individual succulents, cacti, and houseplants shipped online
-- Air plants and air plant terrarium kits
-- Succulent gift boxes (occasion-based: birthday, thinking of you, thank you, sympathy, Mother's Day)
-- Monthly succulent subscription boxes`
 
 // Sources — observed GSC queries and AI expansions must always stay distinguishable
 export const SOURCES = {
@@ -222,7 +217,9 @@ export function parseStoreUrl(input) {
 export function isAllowedStoreHost(url) {
   try {
     const u = new URL(url)
+    // No credentials or custom ports — also applied to every redirect destination
     return ['http:', 'https:'].includes(u.protocol) && ALLOWED_HOSTS.includes(u.hostname.toLowerCase())
+      && !u.username && !u.password && u.port === ''
   } catch {
     return false
   }

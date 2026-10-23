@@ -1,5 +1,6 @@
 // Google Ads restricted category "Birth Control, Fertility, and Testing": never advertise on fertility/IVF terms
 import { describe, it, expect } from 'vitest'
+import { TEST_PROMPTS } from './helpers.js'
 import { assessKeyword, validateKeywords } from '../src/shared/relevance.js'
 import { restrictedTopic, checkKeywordEligibility, validateHeadlines } from '../src/shared/keywordRules.js'
 import { newProject, ensureCategoryGroups, updateGroup, mergeKeywords, editKeyword, cleanProject } from '../src/lib/workspace.js'
@@ -28,13 +29,13 @@ describe('fertility / IVF keywords are skipped everywhere', () => {
     expect(r.accepted).toEqual(['succulent gift box'])
     expect(r.rejected[0]).toMatchObject({ keyword: 'ivf gift box', reason: 'restricted' })
   })
-  it('AI expansions with restricted terms are dropped, and the prompt forbids them', async () => {
+  it('AI expansions with restricted terms are dropped, and restricted seeds never reach the prompt', async () => {
     let prompt = ''
     const model = async p => { prompt = p; return { expansions: [{ keyword: 'ivf succulent gift box', seeds: [1] }, { keyword: 'succulent gift set', seeds: [1] }] } }
     const adGroup = { mode: 'category', name: 'Gift Boxes', category: 'Gift Boxes', landingUrl: 'x', context: {} }
-    const res = await generateKeywords({ adGroup, seeds: [{ query: 'succulent gift box' }, { query: 'ivf gift box' }] }, model)
+    const res = await generateKeywords({ adGroup, seeds: [{ query: 'succulent gift box' }, { query: 'ivf gift box' }] }, model, TEST_PROMPTS)
     expect(prompt).not.toContain('ivf gift box')
-    expect(prompt).toMatch(/Never use fertility, IVF/)
+    expect(prompt).toMatch(/Respond with ONLY valid JSON/) // response format is fixed in code
     expect(res.keywords.map(k => k.keyword)).toEqual(['succulent gift set'])
   })
   it('cannot be added or edited in manually; Clean removes them even if typed in', () => {

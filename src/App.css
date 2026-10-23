@@ -249,3 +249,7 @@ h2 { font-size: 16px; font-weight: 500; }
 .rel-ok { color: #3b6d11; font-weight: 500; }
 .rel-bad { color: #a32d2d; font-weight: 500; }
 .copy-status { color: #008300; font-size: 13px; font-weight: 500; }
+.status-box { background: #f1f6ec; border: 0.5px solid #b9d3a1; border-radius: 8px; padding: 10px 14px; color: #2f5a14; font-size: 13px; }
+.team-table td, .team-table th { padding: 8px 10px; text-align: left; }
+.card { background: #fff; border: 0.5px solid #e1e0d9; border-radius: 12px; padding: 20px; }
+.card .btn-sm-primary { white-space: nowrap; }

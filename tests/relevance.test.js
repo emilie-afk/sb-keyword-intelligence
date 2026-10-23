@@ -1,5 +1,6 @@
 // Target relevance + advertising intent across category, collection and product targets.
 import { describe, it, expect, beforeEach } from 'vitest'
+import { TEST_PROMPTS } from './helpers.js'
 import { assessKeyword, validateKeywords, relevanceTarget } from '../src/shared/relevance.js'
 import {
   createStore, newProject, ensureCategoryGroups, createPageGroup, findSeeds, runKeywordGeneration, projectRows,
@@ -173,17 +174,17 @@ describe('pipeline', () => {
 
   it('server: validate action and generation enforce the same rules', async () => {
     const adGroup = { mode: 'category', name: 'Gift Boxes', category: 'Gift Boxes', landingUrl: 'x', context: {} }
-    const v = await handleRequest({ action: 'validate', adGroup, keywords: [...SCREENSHOT_UNRELATED, 'succulent gift box'] }, async () => { throw new Error('no model for validate') })
+    const v = await handleRequest({ action: 'validate', adGroup, keywords: [...SCREENSHOT_UNRELATED, 'succulent gift box'] }, { getModel: () => { throw new Error('no model for validate') }, getPrompts: () => { throw new Error('no prompts for validate') } })
     expect(v.accepted).toEqual(['succulent gift box'])
     expect(v.rejected).toHaveLength(4)
 
     let prompt = ''
     const model = async p => { prompt = p; return { expansions: [{ keyword: 'leca for plants', seeds: [1] }, { keyword: 'succulent gift set', seeds: [1] }] } }
-    const res = await generateKeywords({ adGroup, seeds: [{ query: 'succulent gift box' }, { query: 'well draining potting mix for succulents' }] }, model)
+    const res = await generateKeywords({ adGroup, seeds: [{ query: 'succulent gift box' }, { query: 'well draining potting mix for succulents' }] }, model, TEST_PROMPTS)
     expect(prompt).not.toContain('potting mix') // irrelevant seed dropped before the model sees it
     expect(prompt).toContain('gifting intent')
     expect(res.keywords.map(k => k.keyword)).toEqual(['succulent gift set'])
-    await expect(generateKeywords({ adGroup, seeds: [{ query: 'what plants grow well in leca' }] }, model)).rejects.toThrow(/None of the GSC seed queries is clearly relevant/)
+    await expect(generateKeywords({ adGroup, seeds: [{ query: 'what plants grow well in leca' }] }, model, TEST_PROMPTS)).rejects.toThrow(/None of the GSC seed queries is clearly relevant/)
   })
 
   it('collection/product targets: validation uses the selected products', () => {

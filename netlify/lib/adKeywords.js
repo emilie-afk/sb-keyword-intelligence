@@ -8,22 +8,27 @@
 //       -> { results: { [base]: { headlines: [h1,h2,h3], valid, issues } } }
 //
 // adGroup = { mode: 'category'|'collection'|'product', name, category, landingUrl, context }
+//
+// The SB-specific prompt text (brand context, templates, category focus, mode rules) is private
+// runtime configuration loaded by netlify/lib/prompts.js. This file only builds the generic parts
+// (facts, numbered seeds, response format) and enforces the deterministic rules on every result.
 
 import {
-  BRAND_CONTEXT, CATEGORIES, CATEGORY_DESCRIPTIONS, HEADLINE_MAX,
+  CATEGORIES, CATEGORY_DESCRIPTIONS, HEADLINE_MAX,
   checkKeywordEligibility, normalizeKeyword, validateHeadlines,
 } from '../../src/shared/keywordRules.js'
 import { assessKeyword, relevanceTarget, validateKeywords } from '../../src/shared/relevance.js'
+import { HttpError } from './auth.js'
+import { renderTemplate } from './prompts.js'
 
 const ANTHROPIC_API_URL = 'https://api.anthropic.com/v1/messages'
 const MODEL = 'claude-haiku-4-5-20251001'
 const MODEL_TIMEOUT_MS = 22000
 export const MAX_HEADLINE_BATCH = 10
 
-export class RequestError extends Error {
-  constructor(message, status = 400) {
-    super(message)
-    this.status = status
+export class RequestError extends HttpError {
+  constructor(message, status = 400, code = 'bad_request') {
+    super(status, code, message)
   }
 }
 
@@ -41,14 +46,14 @@ export function anthropicCaller(apiKey, fetchImpl = fetch) {
         body: JSON.stringify({ model: MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
       })
     } catch (err) {
-      if (err.name === 'AbortError') throw new RequestError('Claude took too long to respond — please retry', 504)
-      throw new RequestError(`Could not reach Claude: ${err.message}`, 502)
+      if (err.name === 'AbortError') throw new RequestError('Claude took too long to respond — please retry', 504, 'model_timeout')
+      throw new RequestError('Could not reach Claude — please retry', 502, 'model_unavailable')
     } finally {
       clearTimeout(timer)
     }
     if (!response.ok) {
-      const err = await response.json().catch(() => ({}))
-      throw new RequestError(err.error?.message || `Anthropic API error: ${response.status}`, 502)
+      // Never relay the provider's response body (it can contain account or request details)
+      throw new RequestError(`Claude request failed (HTTP ${response.status}) — please retry`, 502, 'model_error')
     }
     const data = await response.json()
     return parseModelJson(data.content?.[0]?.text || '')
@@ -64,7 +69,7 @@ export function parseModelJson(text) {
     if (m) {
       try { return JSON.parse(m[0]) } catch { /* fall through */ }
     }
-    throw new RequestError('Claude returned an unreadable response — please retry', 502)
+    throw new RequestError('Claude returned an unreadable response — please retry', 502, 'model_error')
   }
 }
 
@@ -111,73 +116,47 @@ export function contextText(adGroup) {
   return ''
 }
 
-const CATEGORY_FOCUS = {
-  'Gift Boxes': '- Every keyword must express gifting intent (gift, present, occasion or recipient) for PLANT gifts / plant gift boxes. No general plant shopping, soil, supplies, care or lighting terms.',
-  Succulents: '- Every keyword must be about live succulents or cacti. No houseplants, air plants, gift boxes, subscriptions, soil or care terms.',
-  Houseplants: '- Every keyword must be about live houseplants / indoor plants. No succulents, air plants, gift boxes, soil, lighting or care terms.',
-  'Air Plants': '- Every keyword must be about air plants (tillandsia). No succulents, houseplants, soil or care terms.',
-  'Succulent Subscription': '- Every keyword must be about a plant/succulent subscription or monthly plant box.',
+const seedLine = (s, i) => `${i + 1}. ${s.query}${s.scope === 'page' ? '  [searched for this page]' : s.scope === 'derived' ? '  [theme derived from a longer real query]' : ''}`
+const avoidBlock = avoid => (avoid.length
+  ? `Keywords already in this ad group (do not repeat or trivially reword them):\n${avoid.slice(0, 80).map(s => `- ${s}`).join('\n')}\n`
+  : '')
+
+// Response formats are fixed in code so a template edit can never break parsing
+export const KEYWORD_RESPONSE_FORMAT = 'Respond with ONLY valid JSON: {"expansions":[{"keyword":"...","seeds":[1,2]}]}'
+export const HEADLINE_RESPONSE_FORMAT = 'Respond ONLY with valid JSON: {"results":[{"keyword":"...","headlines":["H1","H2","H3"]}]}'
+
+function requirePrompts(prompts) {
+  if (!prompts?.keywordTemplate || !prompts?.headlineTemplate) {
+    throw new HttpError(503, 'prompts_unavailable', 'Keyword generation is not configured yet: the prompt configuration is missing. Ask the owner to import it.')
+  }
+  return prompts
 }
 
-const MODE_RULES = {
-  category: `- Category-level terms only. Do NOT use individual plant species/variety names unless the cited real query contains that plant.
-- Stay inside this category; do not drift into other categories or products.`,
-  collection: `- Keywords must be relevant to this collection and the selected products listed in FACTS.
-- Plant or product names are allowed ONLY if they appear in FACTS.
-- Do not target products that are not in FACTS.`,
-  product: `- Keywords must target this specific product. Its product/plant name and close variations are allowed and encouraged.
-- Include buying-intent variations (buy, for sale, online, delivered, gift) where natural.
-- Do not target other products or plants that are not mentioned in FACTS.`,
+export function keywordPrompt(adGroup, seeds, avoid, count, prompts) {
+  const p = requirePrompts(prompts)
+  return `${renderTemplate(p.keywordTemplate, {
+    brand_context: p.brandContext,
+    ad_group_name: clip(adGroup.name, 80),
+    mode: adGroup.mode,
+    facts: buildFacts(adGroup),
+    seeds: seeds.map(seedLine).join('\n'),
+    avoid_block: avoidBlock(avoid),
+    category_focus: p.categoryFocus?.[adGroup.category] || '',
+    count,
+    mode_rules: p.modeRules?.[adGroup.mode] || '',
+  })}\n\n${KEYWORD_RESPONSE_FORMAT}`
 }
 
-function keywordPrompt(adGroup, seeds, avoid, count) {
-  return `${BRAND_CONTEXT}
-
-You are building ONE Google Ads ad group: "${clip(adGroup.name, 80)}" (${adGroup.mode} mode).
-
-FACTS (the only information you may rely on for relevance and claims):
-${buildFacts(adGroup)}
-
-REAL SEARCH QUERIES from Google Search Console for this target (numbered). These are the starting point:
-${seeds.map((s, i) => `${i + 1}. ${s.query}${s.scope === 'page' ? '  [searched for this page]' : s.scope === 'derived' ? '  [theme derived from a longer real query]' : ''}`).join('\n')}
-
-${avoid.length ? `Keywords already in this ad group (do not repeat or trivially reword them):\n${avoid.slice(0, 80).map(s => `- ${s}`).join('\n')}\n` : ''}
-${CATEGORY_FOCUS[adGroup.category] || ''}
-Write up to ${count} keyword EXPANSIONS derived from the real queries above:
-- refine wording, add buying-intent variations (buy, for sale, online, delivered, gift), or add closely related terms
-- every expansion must cite the number(s) of the real query or queries it is derived from
-- never repeat a real query as-is (those are already in the ad group)
-Rules:
-${MODE_RULES[adGroup.mode]}
-- Stay relevant to the FACTS; do not introduce products or features that are not in FACTS.
-- No care/how-to/informational queries.
-- Never use fertility, IVF or infertility terms (Google Ads restricted category).
-- Only products Succulents Box actually sells (no cactus subscription box, no air plant subscription).
-- Lowercase, no match-type punctuation, 2–7 words each.
-- Do not include search volume, CPC or any metrics.
-
-Respond with ONLY valid JSON: {"expansions":[{"keyword":"...","seeds":[1,2]}]}`
-}
-
-function headlinePrompt(adGroup, keywords) {
-  return `You write Google Ads headlines for Succulents Box — warm, friendly tone, not salesy.
-Ad group: "${clip(adGroup.name, 80)}" (${adGroup.mode} mode)
-
-FACTS (the only information you may rely on):
-${buildFacts(adGroup)}
-
-For each keyword write exactly 3 headlines.
-Rules:
-- Max ${HEADLINE_MAX} characters each (count carefully), sentence case, no exclamation marks, distinct angles.
-- Only state contents, quantities, variants, personalization, prices, shipping or discounts if they appear in FACTS.
-- In collection mode, never apply one product's feature to the whole collection.
-- Do not mention competitors or make unverifiable superlatives.
-- Never mention fertility, IVF or infertility (Google Ads restricted category).
-
-Keywords:
-${keywords.map(k => `- ${k}`).join('\n')}
-
-Respond ONLY with valid JSON: {"results":[{"keyword":"...","headlines":["H1","H2","H3"]}]}`
+export function headlinePrompt(adGroup, keywords, prompts) {
+  const p = requirePrompts(prompts)
+  return `${renderTemplate(p.headlineTemplate, {
+    brand_context: p.brandContext,
+    ad_group_name: clip(adGroup.name, 80),
+    mode: adGroup.mode,
+    facts: buildFacts(adGroup),
+    headline_max: HEADLINE_MAX,
+    keywords: keywords.map(k => `- ${k}`).join('\n'),
+  })}\n\n${HEADLINE_RESPONSE_FORMAT}`
 }
 
 function validateAdGroup(adGroup) {
@@ -192,7 +171,7 @@ function validateAdGroup(adGroup) {
   }
 }
 
-export async function generateKeywords({ adGroup, seeds = [], avoid = [], count = 12 }, callModel) {
+export async function generateKeywords({ adGroup, seeds = [], avoid = [], count = 12 }, callModel, prompts) {
   validateAdGroup(adGroup)
   const seedList = (Array.isArray(seeds) ? seeds : [])
     .map(s => (typeof s === 'string' ? { query: s, scope: 'site-wide' } : s))
@@ -210,10 +189,10 @@ export async function generateKeywords({ adGroup, seeds = [], avoid = [], count 
   }
   seedList.splice(0, seedList.length, ...relevantSeeds)
   const n = Math.max(3, Math.min(25, Number(count) || 12))
-  const avoidBases = avoid.map(normalizeKeyword).filter(Boolean)
-  const result = await callModel(keywordPrompt(adGroup, seedList, avoidBases, n), 1500)
+  const avoidBases = (Array.isArray(avoid) ? avoid : []).slice(0, 2000).map(normalizeKeyword).filter(Boolean)
+  const result = await callModel(keywordPrompt(adGroup, seedList, avoidBases, n, prompts), 1500)
 
-  const raw = Array.isArray(result?.expansions) ? result.expansions : []
+  const raw = (Array.isArray(result?.expansions) ? result.expansions : []).slice(0, 60) // output limit
   const seen = new Set([...seedList.map(s => s.base), ...avoidBases])
   const ctxText = contextText(adGroup)
   const keywords = []
@@ -239,16 +218,18 @@ export async function generateKeywords({ adGroup, seeds = [], avoid = [], count 
     seen.add(base)
     keywords.push({ keyword: base, category: adGroup.category || adGroup.mode, seedRefs: refs })
   }
-  return { keywords, rejected }
+  // Rejected model output is reported briefly (enough to review, not a channel for long text)
+  return { keywords, rejected: rejected.slice(0, 30).map(r => ({ ...r, keyword: r.keyword.split(' ').slice(0, 10).join(' ').slice(0, 80) })) }
 }
 
-export async function generateHeadlines({ adGroup, keywords = [] }, callModel) {
+export async function generateHeadlines({ adGroup, keywords = [] }, callModel, prompts) {
   validateAdGroup(adGroup)
+  if (!Array.isArray(keywords) || keywords.length > 50) throw new RequestError(`Send at most ${MAX_HEADLINE_BATCH} keywords per request`)
   const bases = [...new Set(keywords.map(normalizeKeyword).filter(Boolean))]
   if (bases.length === 0) return { results: {} }
   if (bases.length > MAX_HEADLINE_BATCH) throw new RequestError(`Send at most ${MAX_HEADLINE_BATCH} keywords per request`)
 
-  const result = await callModel(headlinePrompt(adGroup, bases), 1500)
+  const result = await callModel(headlinePrompt(adGroup, bases, prompts), 1500)
   const byBase = {}
   for (const item of (result?.results || [])) {
     const base = normalizeKeyword(item?.keyword)
@@ -257,7 +238,8 @@ export async function generateHeadlines({ adGroup, keywords = [] }, callModel) {
   // Only the requested keywords are returned — the model can never add keywords here
   const results = {}
   for (const base of bases) {
-    const headlines = Array.isArray(byBase[base]) ? byBase[base].map(h => (typeof h === 'string' ? h.trim() : '')) : []
+    // Model text returned to the browser is bounded (limits how much of a prompt a crafted input could echo back)
+    const headlines = Array.isArray(byBase[base]) ? byBase[base].slice(0, 3).map(h => (typeof h === 'string' ? h.trim().slice(0, HEADLINE_MAX * 2) : '')) : []
     const check = byBase[base] ? validateHeadlines(headlines) : { valid: false, issues: ['no headlines returned'] }
     results[base] = { headlines, valid: check.valid, issues: check.issues }
   }
@@ -271,9 +253,13 @@ export function validateTargetKeywords({ adGroup, keywords = [] }) {
   return validateKeywords(keywords, adGroup)
 }
 
-export async function handleRequest(body, callModel) {
+// Which usage bucket a request counts against (also used to authorize it)
+export const ACTIONS = { validate: 'validate', keywords: 'keywords', headlines: 'headlines' }
+
+// getModel / getPrompts are only called for actions that need them (validate needs neither)
+export async function handleRequest(body, { getModel, getPrompts } = {}) {
   if (body?.action === 'validate') return validateTargetKeywords(body)
-  if (body?.action === 'keywords') return generateKeywords(body, callModel)
-  if (body?.action === 'headlines') return generateHeadlines(body, callModel)
+  if (body?.action === 'keywords') return generateKeywords(body, await getModel(), await getPrompts())
+  if (body?.action === 'headlines') return generateHeadlines(body, await getModel(), await getPrompts())
   throw new RequestError("Unknown action — expected 'validate', 'keywords' or 'headlines'")
 }
