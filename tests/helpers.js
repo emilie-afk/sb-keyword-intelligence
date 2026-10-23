@@ -1,4 +1,8 @@
+import { readFileSync } from 'node:fs'
 import { validateKeywords } from '../src/shared/relevance.js'
+
+// Synthetic prompt configuration (the real one is private runtime data)
+export const TEST_PROMPTS = JSON.parse(readFileSync(new URL('../config/prompts.example.json', import.meta.url), 'utf8'))
 // Test helpers — mocked external responses only (no live AI or network calls)
 
 export function jsonResponse(body, status = 200, headers = {}) {

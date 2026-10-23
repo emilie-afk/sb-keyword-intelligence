@@ -1,6 +1,9 @@
 -- SB Keyword Intelligence — Supabase schema
 -- Run this in your Supabase project: SQL Editor → New query → paste & run
--- This adds 3 new tables to your existing project without touching anything else
+-- This adds 3 new tables to your existing project without touching anything else.
+-- RLS is enabled with NO policies: nothing is accessible until you run the migrations in order,
+-- ending with migrations/20261023_access_control.sql (approved-member access). Never add an
+-- always-true policy: the publishable key is public.
 
 -- ─────────────────────────────────────────────
 -- 1. gsc_uploads — one row per analysis run
@@ -17,13 +20,8 @@ create table if not exists gsc_uploads (
   site_url      text default 'succulentsbox.com'
 );
 
--- Anyone with the anon key can read/write (site is protected by Netlify password)
 alter table gsc_uploads enable row level security;
-
-create policy "Public access for gsc_uploads"
-  on gsc_uploads for all
-  using (true)
-  with check (true);
+-- No policies here: access is granted to approved members by migrations/20261023_access_control.sql
 
 
 -- ─────────────────────────────────────────────
@@ -44,11 +42,7 @@ create table if not exists search_queries (
 );
 
 alter table search_queries enable row level security;
-
-create policy "Public access for search_queries"
-  on search_queries for all
-  using (true)
-  with check (true);
+-- No policies here: access is granted to approved members by migrations/20261023_access_control.sql
 
 -- Index for fast lookups by upload
 create index if not exists idx_search_queries_upload_id on search_queries(upload_id);
@@ -73,11 +67,7 @@ create table if not exists ad_keywords (
 );
 
 alter table ad_keywords enable row level security;
-
-create policy "Public access for ad_keywords"
-  on ad_keywords for all
-  using (true)
-  with check (true);
+-- No policies here: access is granted to approved members by migrations/20261023_access_control.sql
 
 -- Index for fast lookups
 create index if not exists idx_ad_keywords_upload_id on ad_keywords(upload_id);

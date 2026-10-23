@@ -1,64 +1,31 @@
-import { useEffect, useRef } from 'react'
+import { useState } from 'react'
+import { signInWithGoogle, signOut } from '../lib/supabase'
 
-export default function SignInPage({ onSignIn, error, setError }) {
-  const btnRef = useRef()
+// Sign-in is handled by Supabase Auth (Google provider). The browser never decides who has access:
+// the database checks the verified account against the member list on every request.
+const MESSAGES = {
+  pending: ['Waiting for approval', 'Your access request was sent. The owner needs to approve it before you can use the app.'],
+  revoked: ['Access removed', 'Your access to this app was removed. Ask the owner if you think this is a mistake.'],
+  unverified: ['Email not verified', 'This account has no verified email address, so it cannot be approved.'],
+  conflict: ['Account mismatch', 'This email is already linked to a different sign-in. Ask the owner for help.'],
+  email_changed: ['Account changed', 'The email on this account changed since it was approved. Ask the owner to approve it again.'],
+  closed: ['Requests closed', 'Too many access requests are waiting. Ask the owner directly.'],
+  not_configured: ['Not configured', 'Sign-in is not configured for this site (Supabase settings are missing).'],
+}
 
-  useEffect(() => {
-    if (!window.google?.accounts?.id) {
-      // GIS script not loaded yet — retry after a short delay
-      const timer = setTimeout(() => {
-        initSignIn()
-      }, 1000)
-      return () => clearTimeout(timer)
-    }
-    initSignIn()
-  }, [])
+export default function SignInPage({ state = 'signed_out', email, error }) {
+  const [busy, setBusy] = useState(false)
+  const [startError, setStartError] = useState(null)
+  const message = MESSAGES[state]
 
-  function initSignIn() {
-    if (!window.google?.accounts?.id) return
-
-    window.google.accounts.id.initialize({
-      client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
-      callback: handleCredential,
-      auto_select: false,
-    })
-
-    window.google.accounts.id.renderButton(btnRef.current, {
-      theme: 'outline',
-      size: 'large',
-      text: 'sign_in_with',
-      shape: 'rectangular',
-      width: 280,
-    })
-  }
-
-  function handleCredential(response) {
-    setError(null)
+  const start = async () => {
+    setBusy(true)
+    setStartError(null)
     try {
-      // Decode the JWT payload (not for security — just to read the email)
-      const payload = JSON.parse(atob(response.credential.split('.')[1]))
-      const email = payload.email?.toLowerCase()
-
-      const allowed = (import.meta.env.VITE_ALLOWED_EMAILS || '')
-        .split(',')
-        .map(e => e.trim().toLowerCase())
-        .filter(Boolean)
-
-      if (allowed.length === 0) {
-        // No allowlist set — block everyone as a safety measure
-        setError('VITE_ALLOWED_EMAILS is not configured. Add allowed emails to your Netlify environment variables.')
-        return
-      }
-
-      if (!allowed.includes(email)) {
-        setError(`Access denied. ${payload.email} is not on the allowed list.`)
-        window.google.accounts.id.disableAutoSelect()
-        return
-      }
-
-      onSignIn({ email: payload.email, name: payload.given_name || payload.name })
-    } catch {
-      setError('Sign-in failed. Please try again.')
+      await signInWithGoogle() // redirects to Google, then back here
+    } catch (err) {
+      setStartError(err.message)
+      setBusy(false)
     }
   }
 
@@ -69,15 +36,30 @@ export default function SignInPage({ onSignIn, error, setError }) {
         <h1>SB Keyword Intelligence</h1>
         <p className="connect-subtitle">Search performance · Ad keyword generation</p>
 
-        <div style={{ margin: '28px 0 8px', display: 'flex', justifyContent: 'center' }}>
-          <div ref={btnRef} />
-        </div>
+        {state === 'checking' && <p style={{ marginTop: 24 }}>Checking your access…</p>}
+
+        {message && (
+          <div className={state === 'pending' ? 'status-box' : 'error-box'} style={{ marginTop: 24, textAlign: 'left' }}>
+            <strong>{message[0]}</strong>
+            <div>{message[1]}</div>
+            {email && <div style={{ marginTop: 6, color: '#5f5e5a' }}>Signed in as {email}</div>}
+          </div>
+        )}
+
+        {state === 'signed_out' && (
+          <div style={{ margin: '28px 0 8px', display: 'flex', justifyContent: 'center' }}>
+            <button className="btn-primary" onClick={start} disabled={busy}>{busy ? 'Opening Google…' : 'Sign in with Google'}</button>
+          </div>
+        )}
+        {message && state !== 'not_configured' && (
+          <button className="btn-ghost" style={{ marginTop: 16 }} onClick={() => signOut()}>Sign out</button>
+        )}
 
         <p style={{ fontSize: 12, color: '#898781', marginTop: 12 }}>
-          Only authorized accounts can sign in.
+          Only approved team members can use this app.
         </p>
 
-        {error && <div className="error-box" style={{ marginTop: 16 }}>{error}</div>}
+        {(error || startError) && <div className="error-box" style={{ marginTop: 16 }}>{error || startError}</div>}
       </div>
     </div>
   )

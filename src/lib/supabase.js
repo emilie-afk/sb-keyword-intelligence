@@ -3,22 +3,52 @@ import { formatMatchType, MATCH_TYPES, normalizeSource } from '../shared/keyword
 import { serializeProject } from './workspace.js'
 import { primaryEvidence } from './seedMatching.js'
 
-// These are safe to expose — they're the "publishable" keys
-// The site is protected by Netlify password, and Supabase RLS adds a second layer
+// The URL and publishable (anon) key are public by design. They grant nothing on their own:
+// every table requires a signed-in, approved member (RLS in supabase/migrations/20261023_access_control.sql).
+// Never put a service-role / secret key in a VITE_ variable — those are shipped to the browser.
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.error('Missing Supabase environment variables. Check your .env.local file.')
-}
+export const supabaseConfigured = !!(supabaseUrl && supabaseAnonKey)
 
-let client = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null
+let client = supabaseConfigured
+  ? createClient(supabaseUrl, supabaseAnonKey, {
+    auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce' },
+  })
+  : null
 export const getClient = () => {
   if (!client) throw new Error('Supabase is not configured (VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY).')
   return client
 }
 // Tests inject a mock client
 export const setClient = c => { client = c }
+
+// ── Authentication (Supabase Auth, Google provider) ──
+export async function signInWithGoogle() {
+  const { error } = await getClient().auth.signInWithOAuth({
+    provider: 'google',
+    options: { redirectTo: `${window.location.origin}/` },
+  })
+  if (error) throw new Error('Google sign-in could not start. Please try again.')
+}
+
+export async function signOut() {
+  try { await getClient().auth.signOut() } catch { /* the local session is cleared either way */ }
+}
+
+export async function currentSession() {
+  const { data } = await getClient().auth.getSession() // refreshes an expired access token when possible
+  return data?.session || null
+}
+
+export const onAuthChange = cb => getClient().auth.onAuthStateChange((event, session) => cb(event, session)).data.subscription
+
+// Server-decided access for the signed-in user: { status: approved|pending|revoked|unverified|..., role }
+export async function myAccess() {
+  const { data, error } = await getClient().rpc('app_my_access')
+  if (error) throw new Error('Could not check your access. Please try again.')
+  return data || { status: 'anonymous' }
+}
 
 const BATCH = 500
 

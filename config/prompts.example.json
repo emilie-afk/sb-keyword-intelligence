@@ -1,0 +1,18 @@
+{
+  "_comment": "SYNTHETIC EXAMPLE ONLY. The real prompt configuration is private runtime data stored in Supabase (app_prompt_versions) and imported with scripts/import-prompts.mjs. Placeholders: {{brand_context}} {{ad_group_name}} {{mode}} {{facts}} {{seeds}} {{avoid_block}} {{category_focus}} {{count}} {{mode_rules}} {{headline_max}} {{keywords}}. Do not include the response-format line; the server appends it.",
+  "brandContext": "Example Plant Shop sells example plants and example gift boxes.",
+  "categoryFocus": {
+    "Gift Boxes": "- Example focus: every keyword must express gifting intent for plant gifts.",
+    "Succulents": "- Example focus: live succulents only.",
+    "Houseplants": "- Example focus: live houseplants only.",
+    "Air Plants": "- Example focus: air plants only.",
+    "Succulent Subscription": "- Example focus: plant subscriptions only."
+  },
+  "modeRules": {
+    "category": "- Example rule for category ad groups.",
+    "collection": "- Example rule for collection ad groups.",
+    "product": "- Example rule for product ad groups."
+  },
+  "keywordTemplate": "{{brand_context}}\n\nAd group: \"{{ad_group_name}}\" ({{mode}} mode).\n\nFACTS:\n{{facts}}\n\nREAL SEARCH QUERIES (numbered):\n{{seeds}}\n\n{{avoid_block}}\n{{category_focus}}\nWrite up to {{count}} keyword expansions that cite the numbers of the queries they come from.\nRules:\n{{mode_rules}}\n- Example rule: lowercase, 2–7 words.",
+  "headlineTemplate": "Write Google Ads headlines for an example shop.\nAd group: \"{{ad_group_name}}\" ({{mode}} mode)\n\nFACTS:\n{{facts}}\n\nFor each keyword write exactly 3 headlines of at most {{headline_max}} characters.\n\nKeywords:\n{{keywords}}"
+}

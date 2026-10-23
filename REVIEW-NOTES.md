@@ -1,6 +1,6 @@
 # Ad Keywords workspace — review notes
 
-Release build. Migrations applied to production on 2026-10-21; relevance update is local (not pushed).
+Migrations 20261021/20261022 applied to production on 2026-10-21. Access control (20261023) is NOT applied — see SECURITY-ROLLOUT.md.
 
 ## Before deploying
 1. **Apply the migrations in order** (Supabase → SQL Editor), both not yet applied to production:
@@ -10,8 +10,7 @@ Release build. Migrations applied to production on 2026-10-21; relevance update 
    upgrade from the combined 20261021 file that briefly shipped in the GSC-first build, re-runs in any order.
    Running 20261022 first fails with a clear message and changes nothing.
    Until they are applied, History shows analyses normally and a notice that projects are unavailable.
-2. **Env vars** — unchanged: `ANTHROPIC_API_KEY` (server), `VITE_GOOGLE_CLIENT_ID`, `VITE_ALLOWED_EMAILS`,
-   `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`. No Shopify credentials needed.
+2. **Env vars** — see SECURITY-ROLLOUT.md (Supabase Auth replaces `VITE_ALLOWED_EMAILS`; server-side `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`).
 3. **Netlify**: production is still on `5ed7452` (Jul 21). Later deploys failed because of
    `[functions] timeout = 26` in netlify.toml (invalid — set function timeouts in the Netlify UI) and, on `3295ba0`,
    the leftover `netlify/functions/get-keywords.js` (comment-only file treated as CommonJS). Both are removed in this build.

@@ -1,9 +1,10 @@
-import { describe, it, expect } from 'vitest'
-import { parseStoreUrl, checkKeywordEligibility, validateHeadlines, normalizeKeyword, normalizeSource } from '../src/shared/keywordRules.js'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { parseStoreUrl, isAllowedStoreHost, checkKeywordEligibility, validateHeadlines, normalizeKeyword, normalizeSource } from '../src/shared/keywordRules.js'
+import { TEST_PROMPTS } from './helpers.js'
 import { fetchPageInfo } from '../netlify/lib/shopifyPage.js'
 import { generateKeywords, generateHeadlines, handleRequest, buildFacts } from '../netlify/lib/adKeywords.js'
 import { handler as fetchPageHandler } from '../netlify/functions/fetch-page.js'
-import { callFunction } from '../src/lib/api.js'
+import { callFunction, setAuthTokenGetter, setAuthProblemHandler } from '../src/lib/api.js'
 import { jsonResponse, redirectResponse } from './helpers.js'
 
 describe('URL parsing and normalization', () => {
@@ -129,10 +130,16 @@ describe('fetchPageInfo (server-side page loader)', () => {
     const hang = (url, { signal }) => new Promise((_, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' }))))
     await expect(fetchPageInfo('https://succulentsbox.com/products/a', { fetchImpl: hang, budgetMs: 50 })).rejects.toMatchObject({ code: 'timeout' })
   })
-  it('function returns JSON errors (never HTML) for invalid URLs', async () => {
-    const res = await fetchPageHandler({ httpMethod: 'POST', body: JSON.stringify({ url: 'https://evil.com/products/x' }) })
-    expect(res.statusCode).toBe(400)
-    expect(JSON.parse(res.body)).toMatchObject({ code: 'invalid_url' })
+  it('function returns JSON errors (never HTML) — and refuses to work without a signed-in member', async () => {
+    const res = await fetchPageHandler({ httpMethod: 'POST', headers: {}, body: JSON.stringify({ url: 'https://evil.com/products/x' }) }, {}, { env: { SUPABASE_URL: 'https://db.test', SUPABASE_ANON_KEY: 'k' } })
+    expect(res.statusCode).toBe(401)
+    expect(JSON.parse(res.body)).toMatchObject({ code: 'unauthenticated' })
+    // (invalid URLs for an approved member: tests/endpoints-security.test.js)
+  })
+  it('redirect destinations with credentials or custom ports are refused', () => {
+    expect(isAllowedStoreHost('https://user:pw@succulentsbox.com/products/a')).toBe(false)
+    expect(isAllowedStoreHost('https://succulentsbox.com:8443/products/a')).toBe(false)
+    expect(isAllowedStoreHost('https://succulentsbox.com/products/a')).toBe(true)
   })
 })
 
@@ -148,7 +155,7 @@ describe('ad-keywords server logic (model mocked)', () => {
   it('requires GSC seeds — no AI-only generation', async () => {
     let called = false
     const model = async () => { called = true; return { expansions: [] } }
-    await expect(generateKeywords({ adGroup: categoryGroup, seeds: [] }, model)).rejects.toThrow(/GSC seed query is required/)
+    await expect(generateKeywords({ adGroup: categoryGroup, seeds: [] }, model, TEST_PROMPTS)).rejects.toThrow(/GSC seed query is required/)
     expect(called).toBe(false)
   })
 
@@ -163,7 +170,7 @@ describe('ad-keywords server logic (model mocked)', () => {
       { keyword: 'cheap succulents', seeds: [9] },
       { keyword: 'live succulent plants', seeds: [] },
     ] })
-    const res = await generateKeywords({ adGroup: categoryGroup, seeds }, model)
+    const res = await generateKeywords({ adGroup: categoryGroup, seeds }, model, TEST_PROMPTS)
     expect(res.keywords).toEqual([
       { keyword: 'buy succulents online', category: 'Succulents', seedRefs: ['succulents for sale'] },
     ])
@@ -172,13 +179,13 @@ describe('ad-keywords server logic (model mocked)', () => {
 
   it('category mode allows a plant name only when the cited real query contains it', async () => {
     const model = async () => ({ expansions: [{ keyword: 'buy echeveria online', seeds: [1] }, { keyword: 'pothos for sale', seeds: [1] }] })
-    const res = await generateKeywords({ adGroup: categoryGroup, seeds: [{ query: 'echeveria for sale' }] }, model)
+    const res = await generateKeywords({ adGroup: categoryGroup, seeds: [{ query: 'echeveria for sale' }] }, model, TEST_PROMPTS)
     expect(res.keywords.map(k => k.keyword)).toEqual(['buy echeveria online'])
   })
 
   it('allows the product name in product mode', async () => {
     const model = async () => ({ expansions: [{ keyword: 'buy calico kitten crassula', seeds: [1] }, { keyword: 'pothos plant', seeds: [1] }] })
-    const res = await generateKeywords({ adGroup: productGroup, seeds: [{ query: 'calico kitten succulent', scope: 'page' }] }, model)
+    const res = await generateKeywords({ adGroup: productGroup, seeds: [{ query: 'calico kitten succulent', scope: 'page' }] }, model, TEST_PROMPTS)
     expect(res.keywords.map(k => k.keyword)).toEqual(['buy calico kitten crassula'])
   })
 
@@ -188,9 +195,9 @@ describe('ad-keywords server logic (model mocked)', () => {
     await generateKeywords({
       adGroup: { mode: 'collection', name: 'Gifts', category: 'Gift Boxes', landingUrl: 'x', context: { title: 'Gifts', products: [{ title: 'Birthday Box' }] } },
       seeds: [{ query: 'birthday plant gift', scope: 'page' }],
-    }, model)
+    }, model, TEST_PROMPTS)
     expect(prompt).toContain('1. birthday plant gift  [searched for this page]')
-    await generateKeywords({ adGroup: { mode: 'collection', name: 'Gifts', category: 'Gift Boxes', landingUrl: 'x', context: { title: 'Gifts', products: [{ title: 'Birthday Box' }] } }, seeds: [{ query: 'plant gifts for grandparents', scope: 'derived' }] }, model)
+    await generateKeywords({ adGroup: { mode: 'collection', name: 'Gifts', category: 'Gift Boxes', landingUrl: 'x', context: { title: 'Gifts', products: [{ title: 'Birthday Box' }] } }, seeds: [{ query: 'plant gifts for grandparents', scope: 'derived' }] }, model, TEST_PROMPTS)
     expect(prompt).toContain('1. plant gifts for grandparents  [theme derived from a longer real query]')
     expect(prompt).toContain('Birthday Box')
     expect(prompt).not.toContain('Sympathy Box')
@@ -203,7 +210,7 @@ describe('ad-keywords server logic (model mocked)', () => {
       { keyword: 'buy succulents online', headlines: ['This headline is far too long for ads', 'b', 'c'] },
       { keyword: 'extra keyword the model invented', headlines: ['a', 'b', 'c'] },
     ] })
-    const { results } = await generateHeadlines({ adGroup: categoryGroup, keywords: ['succulent gift box', 'buy succulents online', 'succulent plants'] }, model)
+    const { results } = await generateHeadlines({ adGroup: categoryGroup, keywords: ['succulent gift box', 'buy succulents online', 'succulent plants'] }, model, TEST_PROMPTS)
     expect(Object.keys(results).sort()).toEqual(['buy succulents online', 'succulent gift box', 'succulent plants'])
     expect(results['succulent gift box'].valid).toBe(true)
     expect(results['buy succulents online'].valid).toBe(false)
@@ -217,12 +224,33 @@ describe('ad-keywords server logic (model mocked)', () => {
   })
 
   it('rejects unknown actions and oversized headline batches', async () => {
-    await expect(handleRequest({ action: 'nope' }, async () => ({}))).rejects.toThrow(/Unknown action/)
-    await expect(generateHeadlines({ adGroup: categoryGroup, keywords: Array.from({ length: 11 }, (_, i) => `kw ${i}`) }, async () => ({}))).rejects.toThrow(/at most 10/)
+    await expect(handleRequest({ action: 'nope' }, {})).rejects.toThrow(/Unknown action/)
+    await expect(generateHeadlines({ adGroup: categoryGroup, keywords: Array.from({ length: 11 }, (_, i) => `kw ${i}`) }, async () => ({}), TEST_PROMPTS)).rejects.toThrow(/at most 10/)
   })
 })
 
 describe('client callFunction', () => {
+  beforeEach(() => setAuthTokenGetter(async () => 'h.p.s'))
+  it('sends the session token; refuses to call without one', async () => {
+    let sent
+    const ok = async (url, init) => { sent = init.headers; return { status: 200, ok: true, text: async () => '{"ok":true}' } }
+    await callFunction('ad-keywords', {}, ok)
+    expect(sent.Authorization).toBe('Bearer h.p.s')
+    setAuthTokenGetter(async () => null)
+    let problem = null
+    setAuthProblemHandler(p => { problem = p })
+    let called = false
+    await expect(callFunction('ad-keywords', {}, async () => { called = true })).rejects.toThrow(/sign in again/)
+    expect(called).toBe(false)
+    expect(problem).toBe('signed_out')
+  })
+  it('reports an invalid session or removed access to the app', async () => {
+    const problems = []
+    setAuthProblemHandler(p => problems.push(p))
+    await expect(callFunction('x', {}, async () => ({ status: 401, ok: false, text: async () => '{"error":"Sign in again.","code":"session_invalid"}' }))).rejects.toThrow('Sign in again.')
+    await expect(callFunction('x', {}, async () => ({ status: 403, ok: false, text: async () => '{"error":"Not approved","code":"not_member"}' }))).rejects.toThrow('Not approved')
+    expect(problems).toEqual(['session_invalid', 'not_member'])
+  })
   it('turns an HTML 504 page into a readable error', async () => {
     const fetchImpl = async () => ({ status: 504, ok: false, text: async () => '<HTML><HEAD>Gateway Timeout' })
     await expect(callFunction('ad-keywords', {}, fetchImpl)).rejects.toThrow('The server timed out (504). Please try again.')

@@ -4,13 +4,19 @@ import ConnectPage from './pages/ConnectPage'
 import AnalysisPage from './pages/AnalysisPage'
 import AdKeywordsPage from './pages/AdKeywordsPage'
 import HistoryPage from './pages/HistoryPage'
+import TeamPage from './pages/TeamPage'
+import { supabaseConfigured, currentSession, onAuthChange, myAccess, signOut } from './lib/supabase'
+import { setAuthTokenGetter, setAuthProblemHandler } from './lib/api'
+import { createAccessChecker } from './lib/authFlow'
 import { createStore, newProject, projectFingerprint, datasetRef, datasetKey, uid } from './lib/workspace'
 import { fetchGSCDataset, fetchPageQueries, daysAgo, today } from './lib/gscApi'
 import { processQueries } from './lib/categorize'
 
 export default function App() {
-  const [user, setUser] = useState(null)       // { email, name } once signed in
-  const [authError, setAuthError] = useState(null)
+  // Access is decided by Supabase Auth + the member list in the database, never by the browser.
+  // auth.state: loading | signed_out | checking | pending | revoked | unverified | ... | ready
+  const [auth, setAuth] = useState({ state: supabaseConfigured ? 'loading' : 'not_configured' })
+  const user = auth.state === 'ready' ? auth : null
   const [page, setPage] = useState('connect')
   const [gscToken, setGscToken] = useState(null)
   const [rawData, setRawData] = useState(null)       // optional GSC queries (site-wide)
@@ -68,14 +74,9 @@ export default function App() {
   const fingerprint = useMemo(() => projectFingerprint(project), [project])
   const projectSaved = savedFingerprint !== null && savedFingerprint === fingerprint
 
-  const handleSignIn = (userInfo) => {
-    setUser(userInfo)
-    setAuthError(null)
-  }
-
-  const handleSignOut = () => {
-    window.google?.accounts?.id?.disableAutoSelect()
-    setUser(null)
+  // Clears everything that belongs to the signed-in user (also used when access ends)
+  const resetWorkspace = () => {
+    if (gscTokenRef.current) window.google?.accounts?.oauth2?.revoke?.(gscTokenRef.current, () => {})
     setGscToken(null)
     setRawData(null)
     setUploadMeta(null)
@@ -83,6 +84,41 @@ export default function App() {
     store.setProject(newProject())
     setSavedFingerprint(null)
     setPage('connect')
+  }
+  const resetRef = useRef(resetWorkspace)
+  resetRef.current = resetWorkspace
+  const gscTokenRef = useRef(null)
+  gscTokenRef.current = gscToken
+
+  // Membership checks; responses that arrive after a sign-out or account change are dropped
+  const checkerRef = useRef(null)
+  if (!checkerRef.current) {
+    checkerRef.current = createAccessChecker({
+      getAccess: myAccess,
+      apply: update => setAuth(update),
+      onDenied: () => resetRef.current(),
+      onSignedOut: () => resetRef.current(),
+    })
+  }
+  const checker = checkerRef.current
+
+  useEffect(() => {
+    if (!supabaseConfigured) return undefined
+    setAuthTokenGetter(async () => (await currentSession())?.access_token || null)
+    // Restores a saved session (INITIAL_SESSION), completes the Google redirect (SIGNED_IN),
+    // and reacts to sign-out or a refresh token that expired (SIGNED_OUT).
+    // Each event takes its place in line immediately (see src/lib/authFlow.js); the check itself is
+    // deferred because Supabase must not be called from inside this callback.
+    const sub = onAuthChange((event, session) => { checker.handleAuthEvent(event, session) })
+    setAuthProblemHandler(() => { checker.checkCurrent(currentSession) })
+    return () => { checker.invalidate(); sub.unsubscribe() }
+  }, [checker])
+
+  const handleSignOut = async () => {
+    checker.invalidate() // a membership answer still on its way must not sign the user back in
+    resetWorkspace()
+    setAuth({ state: 'signed_out' })
+    await signOut()
   }
 
   const handleData = (processed, meta, uploadId = null) => {
@@ -104,15 +140,10 @@ export default function App() {
     setSavedFingerprint(null)
   }
 
-  // Show sign-in screen until authenticated
+  // Sign-in, approval and access states until the database confirms an approved member
   if (!user) {
-    return (
-      <SignInPage
-        onSignIn={handleSignIn}
-        error={authError}
-        setError={setAuthError}
-      />
-    )
+    if (auth.state === 'loading') return <div className="page-center"><p>Loading…</p></div>
+    return <SignInPage state={auth.state} email={auth.email} error={auth.error} />
   }
 
   const keywordCount = project.adGroups.reduce((s, g) => s + g.keywords.length, 0)
@@ -138,6 +169,11 @@ export default function App() {
             <button className={page === 'history' ? 'nav-btn active' : 'nav-btn'} onClick={() => setPage('history')}>
               History
             </button>
+            {user.role === 'owner' && (
+              <button className={page === 'team' ? 'nav-btn active' : 'nav-btn'} onClick={() => setPage('team')}>
+                Team
+              </button>
+            )}
           </nav>
 
           <div className="user-row">
@@ -182,6 +218,8 @@ export default function App() {
             onGoToConnect={() => { setReturnTo('keywords'); setPage('connect') }}
           />
         )}
+
+        {page === 'team' && user.role === 'owner' && <TeamPage ownerEmail={user.email} />}
 
         {page === 'history' && (
           <HistoryPage
