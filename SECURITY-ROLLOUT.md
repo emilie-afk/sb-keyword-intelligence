@@ -1,8 +1,7 @@
 # Security rollout — SB Keyword Intelligence
 
-Status: **implemented and tested locally only. Keep the branch off `main` until the prerequisites in
-steps 1–2 are ready.** Production is **not** secured until every step
-below is applied and the checks in step 6 pass. Nothing here has been deployed or migrated.
+Status (2026-10-28): **rolled out and verified in production** (steps 1–6). `VITE_ALLOWED_EMAILS` deleted
+2026-10-28. Remaining: the optional historical clean-up below.
 
 ## What changes
 
@@ -25,11 +24,11 @@ save/load, copy and export. All existing rows stay and remain shared by the team
 | `VITE_SUPABASE_URL` | Builds | `https://<project-ref>.supabase.co` (public) |
 | `VITE_SUPABASE_ANON_KEY` | Builds | `<publishable/anon key>` (public by design) |
 | `VITE_GOOGLE_CLIENT_ID` | Builds | `<client-id>.apps.googleusercontent.com` (Search Console connection) |
-| `SUPABASE_URL` | Functions | same as `VITE_SUPABASE_URL` |
-| `SUPABASE_ANON_KEY` | Functions | same as `VITE_SUPABASE_ANON_KEY` |
+| `SUPABASE_URL` | optional | not needed when `VITE_SUPABASE_URL` has "All scopes" (functions fall back to it) |
+| `SUPABASE_ANON_KEY` | optional | not needed when `VITE_SUPABASE_ANON_KEY` has "All scopes" (same fallback) |
 | `SUPABASE_SERVICE_ROLE_KEY` | Functions | `<service-role or secret key>` — **never** a `VITE_` variable |
 | `ANTHROPIC_API_KEY` | Functions | unchanged |
-| ~~`VITE_ALLOWED_EMAILS`~~ | — | delete after rollout (no longer read) |
+| ~~`VITE_ALLOWED_EMAILS`~~ | — | deleted 2026-10-28 (no longer read) |
 
 Total function env size stays far below the 4 KB Lambda limit; prompts are not stored in env vars.
 Functions fail closed (503) if `SUPABASE_URL`/`SUPABASE_ANON_KEY` are missing, and generation fails with
@@ -37,31 +36,39 @@ Functions fail closed (503) if `SUPABASE_URL`/`SUPABASE_ANON_KEY` are missing, a
 
 ## Google / Supabase configuration
 
-1. **Google Cloud → APIs & Services → Credentials** (OAuth 2.0 Web client used for sign-in; can be the
-   existing client): add the authorized redirect URI `https://<project-ref>.supabase.co/auth/v1/callback`.
-   Keep `https://sb-keyword-intelligence.netlify.app` as an authorized JavaScript origin (Search Console token).
-2. **Supabase → Authentication → Sign In / Providers → Google**: enable, paste the client ID and secret.
-   Scopes: defaults (openid, email, profile) only.
-3. **Supabase → Authentication → URL Configuration**: Site URL `https://sb-keyword-intelligence.netlify.app`;
-   Redirect URLs: the same URL (`https://sb-keyword-intelligence.netlify.app/**`).
-4. **Supabase → Authentication → Providers**: disable Email (password), Phone and Anonymous sign-ins.
-   Membership also requires a Google identity in the database, so an account created another way with the
-   same address can't claim a membership — but there is no reason to leave the other providers on.
-   Keep "Allow new users to sign up" on — a first Google sign-in only creates a *pending* request.
-5. **Supabase → Data API**: exposed schemas stay `public` (+ `graphql_public`); do **not** expose `app_private`.
+**This Supabase project ("sb-social listening") is shared** with `sb-content-intelligence`, which already
+uses Supabase Auth with Google (checked 2026-10-26). Change only what this app needs; do not touch the
+Site URL, sign-up settings or providers — that would break the other app.
+
+1. **Google Cloud:** no change. The Google provider is already enabled in Supabase with its callback.
+   (The Search Console client `VITE_GOOGLE_CLIENT_ID` is separate and unchanged.)
+2. **Supabase → Authentication → URL Configuration → Redirect URLs:** *add*
+   `https://sb-keyword-intelligence.netlify.app/**`. Leave the Site URL and the existing
+   `https://sb-content-intelligence.netlify.app/**` entry as they are.
+3. **Providers / sign-ups:** leave as they are (Email + Google enabled, sign-ups on, confirm email on,
+   anonymous off). This app only accepts accounts with a Google identity and an approved membership, so the
+   Email provider can't be used to get in.
+4. **Supabase → Data API:** exposed schemas stay `public` (+ `graphql_public`); do **not** expose `app_private`.
 
 ## Rollout order (short maintenance window, ~20 minutes)
 
-1. **Back up and record** (read-only)
-   - Supabase → Database → Backups: confirm a recent backup, or export the four tables
-     (`gsc_uploads`, `search_queries`, `ad_keywords`, `keyword_projects`) as CSV from the Table editor.
-   - Run `supabase/checks/rollout-inventory.sql` and save the output (current policies, grants, views,
-     functions, other tables, row counts).
-   - **Other apps:** section 4 of that file lists every table in the project. `ad_keywords` was described
-     as feeding a "content engine". Check Supabase → Logs → API for requests to these tables that do not come
-     from this app, over the last 7 days. Any such integration must move to a server-side key
-     (service role / secret key, server only) **before** step 4 — do not keep public access for it.
-2. **Configure** Google, Supabase Auth and the Netlify env vars above (no effect on the live app yet).
+1. **Back up and record** (read-only) — **done 2026-10-26**, findings:
+   - Policies: the four "Public access" policies (`using (true)`, all commands, role `public`); anon has full
+     privileges on all four tables. Rows: gsc_uploads 1, search_queries 25,000, ad_keywords 261,
+     keyword_projects 0.
+   - No views, functions or foreign keys reference these tables; no name clashes with the new objects;
+     `app_private` does not exist yet.
+   - Other apps: the project also holds ~30 tables of `sb-content-intelligence`; its code
+     (emilie-afk/sb-content-intelligence) does not read or write any of this app's tables. API logs
+     (24 h retention on the free plan) showed no database API traffic at all, so they could not confirm
+     other readers; any unknown reader with the publishable key will get "permission denied" after step 4.
+   - Backup: the free plan has no downloadable backups. CSV exports downloaded 2026-10-26 on Tho's laptop:
+     gsc_uploads (1 row), ad_keywords (261), search_queries (25,000); keyword_projects is empty.
+2. **Configure** the Supabase redirect URL and the Netlify env vars above (no effect on the live app yet).
+   - Redirect URL `https://sb-keyword-intelligence.netlify.app/**` added 2026-10-26 (Site URL unchanged).
+   - Netlify env vars (checked 2026-10-26): `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` already have "All scopes",
+     so the functions use them. `SUPABASE_SERVICE_ROLE_KEY` added by the team (verified 2026-10-28: secret,
+     Functions scope, Production context only; previews have no key, so generation there fails safe).
 3. **Start the window.** Tell the team. Netlify password protection can stay on; it is not relied on.
 4. **Apply the migration and bootstrap — before deploying.** SQL editor:
    - Paste and run `supabase/migrations/20261023_access_control.sql`. From this moment the old app can no
@@ -71,8 +78,21 @@ Functions fail closed (503) if `SUPABASE_URL`/`SUPABASE_ANON_KEY` are missing, a
      `select app_private.bootstrap_owner('<OWNER_EMAIL>');`
      This creates the owner row only. It is **not** linked to an account yet — that happens at the owner's
      first sign-in in step 6, which needs the new code. The old app cannot sign in through Supabase Auth.
-   - Prompts, from a trusted machine with the private file (never committed to GitHub):
-     `SUPABASE_URL=… SUPABASE_SERVICE_ROLE_KEY=… node scripts/import-prompts.mjs <path>/sb-prompts.private.json --activate --note "initial import"`
+   - Team pre-approval (one statement; the addresses are taken from the current `VITE_ALLOWED_EMAILS`
+     value in Netlify and typed only into the SQL editor — never into the repo or docs):
+     `insert into app_members (email, role, status, decided_at) select lower(btrim(e)), 'member', 'approved', now()
+      from unnest(string_to_array('<comma-separated emails>', ',')) as e on conflict (email) do nothing;`
+     Run it after the owner bootstrap, so the owner row is kept. Members then just sign in with Google
+     whenever they next use the app — no approval round trip.
+   - Prompts, either way (the private file is never committed to GitHub):
+     - SQL editor (no key needed): `select app_create_prompt_version('ad_generation', '<contents of sb-prompts.private.json>'::jsonb, 'initial import', null, true);`
+       — run as one statement, don't save it as a snippet;
+     - or from a trusted machine: `SUPABASE_URL=… SUPABASE_SERVICE_ROLE_KEY=… node scripts/import-prompts.mjs <path>/sb-prompts.private.json --activate --note "initial import"`
+   **Done 2026-10-28:** migration applied ("Success"); owner row created (not yet linked); prompt version 1
+   imported and active. `VITE_ALLOWED_EMAILS` held only the owner, so there was no team list to pre-approve.
+   Post-check: 4 member policies on each shared table, 1 on app_members, none open; anon has no table grants
+   and can run no app function; no API access to prompt/usage tables; row counts unchanged
+   (gsc_uploads 1, search_queries 25,000, ad_keywords 261, keyword_projects 0).
 5. **Deploy** the `security-hardening` branch (merge to `main` → Netlify build). Keep the window open and
    ask the team not to sign in yet.
 6. **Owner's first sign-in, then verify**
@@ -88,8 +108,15 @@ Functions fail closed (503) if `SUPABASE_URL`/`SUPABASE_ANON_KEY` are missing, a
    - `curl -X POST https://sb-keyword-intelligence.netlify.app/.netlify/functions/ad-keywords -d '{}'`
      → 401 (behind the Netlify password wall, include the wall's cookie or test from the browser console).
    - A Google account that is not approved → "Waiting for approval", no data.
-7. **Approve the team** on the Team page (pending requests, or "Approve email" before they sign in);
-   each member signs in and checks History. Then delete `VITE_ALLOWED_EMAILS`, end the window.
+   **Done 2026-10-28:** deploy live; owner signed in (linked, Team page shows Owner/Approved/Signed in, prompt v1
+   active). From outside: the publishable key alone gets 401 permission denied on all seven tables and the app
+   RPCs (insert refused too); all four functions return 401 without a token and with a forged one; the live
+   bundle contains no prompt text and no email list. As the owner: History shows the existing analysis; a Gift
+   Boxes generation returned +5 observed queries and +12 AI expansions through the auth gate and DB prompt.
+   Not exercised in production: project save (covered by the RLS tests).
+7. **Team:** already pre-approved in step 4. Anyone signing in with a different Google address appears as
+   "Waiting for approval" on the Team page. Then delete `VITE_ALLOWED_EMAILS` (cleanup: unused, and a
+   `VITE_` variable can be built into the public page again if old code is ever redeployed) and end the window.
 
 Daily limits per user (table `app_usage_limits`, editable in SQL): validate 5000, keywords 500,
 headlines 500, fetch_page 1000, admin 1000.
@@ -134,15 +161,19 @@ Plan, in order:
 
 ## Not verified here (needs production access)
 
-- The policies, grants and views actually present in production (only the committed SQL and the
-  migrations applied on 2026-10-21 are known). Run `rollout-inventory.sql`.
-- Whether another app reads these tables with the publishable key.
+- Whether an app other than sb-content-intelligence reads these tables with the publishable key
+  (logs keep 24 hours on the free plan).
 - Real Google OAuth round trip and Supabase Auth settings; real PostgREST/JWT verification (tested with a
   faithful stand-in that verifies HS256 signatures and expiry).
 - Netlify function timeout setting in the UI and cold-start latency with the added auth call (~1 DB round trip).
 - GitHub fork count.
 
 ## Remaining risks
+
+- **Shared project (outside this app):** sign-ups are open and several `sb-content-intelligence` policies
+  allow any signed-in user (`auth.uid() IS NOT NULL`, or `using (true)` for `authenticated`) to read — and
+  for `brand_content_rules`, update/delete — its data. Anyone can create an account in this project
+  (Email or Google) without either app, so this already exists today; it needs its own fix in that app.
 
 - A signed-out session's access token stays valid until it expires (default 1 hour) for direct database
   reads; membership revocation, however, is enforced on every database query and function call.
