@@ -58,12 +58,12 @@ export function mockApi({ keywordsFor, headlinesFor, validateFor } = {}) {
 }
 
 // In-memory Supabase-like client supporting the query shapes used in src/lib/supabase.js
-export function mockSupabase({ failInsertOn = null, failAfterInserts = Infinity } = {}) {
+export function mockSupabase({ failInsertOn = null, failAfterInserts = Infinity, maxRows = 1000 } = {}) {
   const tables = { gsc_uploads: [], search_queries: [], ad_keywords: [], keyword_projects: [] }
   let id = 0
   let inserts = 0
   const from = (table) => {
-    const state = { op: 'select', filters: [], payload: null, single: false }
+    const state = { op: 'select', filters: [], payload: null, single: false, range: null, order: null }
     const exec = async () => {
       const rows = tables[table]
       const match = r => state.filters.every(([k, v]) => r[k] === v)
@@ -87,7 +87,11 @@ export function mockSupabase({ failInsertOn = null, failAfterInserts = Infinity 
         }
         return { data: null, error: null }
       }
-      const found = rows.filter(match)
+      let found = rows.filter(match)
+      if (state.order) found = [...found].sort((a, b) => String(a[state.order]).localeCompare(String(b[state.order]), 'en', { numeric: true }))
+      // Like PostgREST: a range selects rows, and no response is longer than the server's max rows
+      if (state.range) found = found.slice(state.range[0], state.range[1] + 1)
+      found = found.slice(0, maxRows)
       return { data: state.single ? found[0] : found, error: null }
     }
     const builder = {
@@ -96,7 +100,8 @@ export function mockSupabase({ failInsertOn = null, failAfterInserts = Infinity 
       delete: () => { state.op = 'delete'; return builder },
       select: () => builder,
       eq: (k, v) => { state.filters.push([k, v]); return builder },
-      order: () => builder,
+      order: col => { state.order = col; return builder },
+      range: (a, b) => { state.range = [a, b]; return builder },
       limit: () => builder,
       single: () => { state.single = true; return builder },
       then: (res, rej) => exec().then(res, rej),

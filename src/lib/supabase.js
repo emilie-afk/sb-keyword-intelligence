@@ -209,25 +209,31 @@ export async function loadHistory() {
   return data
 }
 
-// Load queries for a past upload
-export async function loadUploadQueries(uploadId) {
-  const { data, error } = await getClient()
-    .from('search_queries')
-    .select('*')
-    .eq('upload_id', uploadId)
-  if (error) throw error
-  return data
+// The API returns at most 1,000 rows per request (Supabase "max rows"), so large uploads are read page
+// by page in a stable order. The loop advances by the rows actually returned, so a lower server cap
+// still loads everything.
+const MAX_ROWS = 200000
+export async function selectAllRows(table, column, value, { pageSize = 1000 } = {}) {
+  const rows = []
+  while (rows.length < MAX_ROWS) {
+    const { data, error } = await getClient()
+      .from(table)
+      .select('*')
+      .eq(column, value)
+      .order('id', { ascending: true })
+      .range(rows.length, rows.length + pageSize - 1)
+    if (error) throw error
+    if (!data?.length) break
+    rows.push(...data)
+  }
+  return rows
 }
 
-// Load ad keywords for a past upload (legacy rows and project rows linked to that upload)
-export async function loadUploadKeywords(uploadId) {
-  const { data, error } = await getClient()
-    .from('ad_keywords')
-    .select('*')
-    .eq('upload_id', uploadId)
-  if (error) throw error
-  return data
-}
+// Load all queries for a past upload
+export const loadUploadQueries = uploadId => selectAllRows('search_queries', 'upload_id', uploadId)
+
+// Load all ad keywords for a past upload (legacy rows and project rows linked to that upload)
+export const loadUploadKeywords = uploadId => selectAllRows('ad_keywords', 'upload_id', uploadId)
 
 // Normalize legacy/new ad_keywords rows for CSV export
 export function normalizeKeywordRow(k) {
