@@ -36,6 +36,43 @@ describe('History reload paging', () => {
     expect(await loadUploadKeywords('none')).toEqual([])
   })
 
+  it('loads pages concurrently after the first (count) request, in order, with no gaps', async () => {
+    const db = mockSupabase()
+    seed(db, 25000)
+    setClient(db)
+    let inFlight = 0
+    let peak = 0
+    const realFrom = db.from
+    setClient({ from: t => {
+      const b = realFrom(t)
+      const then = b.then
+      b.then = (res, rej) => { inFlight++; peak = Math.max(peak, inFlight); return new Promise(r => setTimeout(r, 1)).then(() => then.call(b, v => { inFlight--; return res(v) }, rej)) }
+      return b
+    } })
+    const rows = await loadUploadQueries('u1')
+    expect(rows.map(r => r.query)).toEqual(Array.from({ length: 25000 }, (_, i) => `q${i}`))
+    expect(peak).toBeGreaterThan(1)
+    expect(peak).toBeLessThanOrEqual(6)
+    expect(db.calls.filter(c => c.table === 'search_queries')).toHaveLength(25)
+  })
+
+  it('falls back to reading page after page if the count does not match what arrives', async () => {
+    const db = mockSupabase()
+    seed(db, 2500)
+    const realFrom = db.from
+    let first = true
+    setClient({ from: t => {
+      const b = realFrom(t)
+      const then = b.then
+      b.then = (res, rej) => then.call(b, v => {
+        if (first && v.count != null) { first = false; return res({ ...v, count: 3000 }) } // stale count
+        return res(v)
+      }, rej)
+      return b
+    } })
+    expect(await loadUploadQueries('u1')).toHaveLength(2500)
+  })
+
   it('errors are not swallowed', async () => {
     setClient({ from: () => { const b = { select: () => b, eq: () => b, order: () => b, range: () => Promise.resolve({ data: null, error: new Error('permission denied') }) }; return b } })
     await expect(loadUploadQueries('u1')).rejects.toThrow('permission denied')

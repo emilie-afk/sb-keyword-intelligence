@@ -62,8 +62,9 @@ export function mockSupabase({ failInsertOn = null, failAfterInserts = Infinity,
   const tables = { gsc_uploads: [], search_queries: [], ad_keywords: [], keyword_projects: [] }
   let id = 0
   let inserts = 0
+  const calls = []
   const from = (table) => {
-    const state = { op: 'select', filters: [], payload: null, single: false, range: null, order: null }
+    const state = { op: 'select', filters: [], payload: null, single: false, range: null, order: null, count: false }
     const exec = async () => {
       const rows = tables[table]
       const match = r => state.filters.every(([k, v]) => r[k] === v)
@@ -88,17 +89,19 @@ export function mockSupabase({ failInsertOn = null, failAfterInserts = Infinity,
         return { data: null, error: null }
       }
       let found = rows.filter(match)
+      const count = state.count ? found.length : undefined
       if (state.order) found = [...found].sort((a, b) => String(a[state.order]).localeCompare(String(b[state.order]), 'en', { numeric: true }))
       // Like PostgREST: a range selects rows, and no response is longer than the server's max rows
       if (state.range) found = found.slice(state.range[0], state.range[1] + 1)
       found = found.slice(0, maxRows)
-      return { data: state.single ? found[0] : found, error: null }
+      calls.push({ table, range: state.range })
+      return { data: state.single ? found[0] : found, error: null, count }
     }
     const builder = {
       insert: p => { state.op = 'insert'; state.payload = p; return builder },
       update: p => { state.op = 'update'; state.payload = p; return builder },
       delete: () => { state.op = 'delete'; return builder },
-      select: () => builder,
+      select: (_cols, opts) => { if (opts?.count) state.count = true; return builder },
       eq: (k, v) => { state.filters.push([k, v]); return builder },
       order: col => { state.order = col; return builder },
       range: (a, b) => { state.range = [a, b]; return builder },
@@ -108,5 +111,5 @@ export function mockSupabase({ failInsertOn = null, failAfterInserts = Infinity,
     }
     return builder
   }
-  return { tables, from }
+  return { tables, from, calls }
 }

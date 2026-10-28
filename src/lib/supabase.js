@@ -209,23 +209,55 @@ export async function loadHistory() {
   return data
 }
 
-// The API returns at most 1,000 rows per request (Supabase "max rows"), so large uploads are read page
-// by page in a stable order. The loop advances by the rows actually returned, so a lower server cap
-// still loads everything.
+// The API returns at most 1,000 rows per request (Supabase "max rows"), so large uploads are read in
+// pages, in a stable order. The first request also returns the total count; the remaining pages are
+// then fetched several at a time. The page size is whatever the server actually returned, so a lower
+// server cap still works. If the pieces don't add up (rows changed during the load), it falls back to
+// reading page after page until no rows remain.
 const MAX_ROWS = 200000
-export async function selectAllRows(table, column, value, { pageSize = 1000 } = {}) {
+const page = (table, column, value, from, to, count) => getClient()
+  .from(table)
+  .select('*', count ? { count: 'exact' } : undefined)
+  .eq(column, value)
+  .order('id', { ascending: true })
+  .range(from, to)
+
+async function selectSequential(table, column, value, pageSize) {
   const rows = []
   while (rows.length < MAX_ROWS) {
-    const { data, error } = await getClient()
-      .from(table)
-      .select('*')
-      .eq(column, value)
-      .order('id', { ascending: true })
-      .range(rows.length, rows.length + pageSize - 1)
+    const { data, error } = await page(table, column, value, rows.length, rows.length + pageSize - 1)
     if (error) throw error
     if (!data?.length) break
     rows.push(...data)
   }
+  return rows
+}
+
+export async function selectAllRows(table, column, value, { pageSize = 1000, concurrency = 6 } = {}) {
+  const first = await page(table, column, value, 0, pageSize - 1, true)
+  if (first.error) throw first.error
+  const head = first.data || []
+  const total = Math.min(first.count ?? 0, MAX_ROWS)
+  if (!head.length || total <= head.length || first.count == null) {
+    return first.count == null && head.length ? selectSequential(table, column, value, pageSize) : head
+  }
+  const step = head.length // the server's real page size
+  const starts = []
+  for (let from = step; from < total; from += step) starts.push(from)
+  const pages = new Array(starts.length)
+  let next = 0
+  const worker = async () => {
+    while (next < starts.length) {
+      const i = next++
+      const { data, error } = await page(table, column, value, starts[i], starts[i] + step - 1)
+      if (error) throw error
+      pages[i] = data || []
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, starts.length) }, worker))
+  const rows = head.concat(...pages)
+  const unique = new Set(rows.map(r => r.id)).size
+  if (rows.length !== total || unique !== rows.length) return selectSequential(table, column, value, pageSize)
   return rows
 }
 
