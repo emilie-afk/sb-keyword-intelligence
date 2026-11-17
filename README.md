@@ -1,7 +1,12 @@
 # SB Keyword Intelligence
 
-A web app for researching and reviewing advertising keywords.
+**Designed and built by Emilie Ngo for Succulents Box.**
 
-- Analyze search terms for a page or topic
-- Generate and group keyword ideas for ads
-- Keep a history of past analyses
+An advertising keyword research tool that uses observed search data for the selected page to ground its recommendations.
+
+## Features
+
+- Review search terms observed for a page.
+- Explore grouped keyword recommendations alongside their supporting search evidence.
+- Review suggestions before using them in campaign planning.
+- Revisit past analyses.
