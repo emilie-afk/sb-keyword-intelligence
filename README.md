@@ -1,7 +1,5 @@
 # SB Keyword Intelligence
 
-**Designed and built by Emilie Ngo for Succulents Box.**
-
 An advertising keyword research tool that uses observed search data for the selected page to ground its recommendations.
 
 ## Features
@@ -10,3 +8,5 @@ An advertising keyword research tool that uses observed search data for the sele
 - Explore grouped keyword recommendations alongside their supporting search evidence.
 - Review suggestions before using them in campaign planning.
 - Revisit past analyses.
+
+Designed and built by Emilie Ngo for Succulents Box.
