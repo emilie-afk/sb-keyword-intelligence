@@ -31,6 +31,7 @@ h2 { font-size: 16px; font-weight: 500; }
 /* ── Connect page ── */
 .connect-card { background: #fff; border: 0.5px solid #e1e0d9; border-radius: 12px; padding: 40px; max-width: 480px; width: 100%; text-align: center; }
 .connect-logo { font-size: 40px; margin-bottom: 12px; }
+.connect-brand-logo { display: block; width: 120px; height: auto; margin: 0 auto 12px; }
 .connect-subtitle { color: #52514e; margin-top: 6px; margin-bottom: 28px; font-size: 14px; }
 .connect-section { text-align: left; margin-bottom: 8px; }
 .connect-section h2 { margin-bottom: 6px; }
